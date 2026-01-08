@@ -1,0 +1,1 @@
+// Script principal pour l'interactivité du front-end

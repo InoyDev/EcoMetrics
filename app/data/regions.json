@@ -1,0 +1,10 @@
+{
+  "regions": [
+    { "id": "fr", "name": "France", "ci_factor": 52 },
+    { "id": "us", "name": "USA (Moyenne)", "ci_factor": 367 },
+    { "id": "de", "name": "Allemagne", "ci_factor": 350 },
+    { "id": "se", "name": "Suède", "ci_factor": 45 },
+    { "id": "cn", "name": "Chine", "ci_factor": 550 },
+    { "id": "world", "name": "Moyenne mondiale", "ci_factor": 475 }
+  ]
+}
