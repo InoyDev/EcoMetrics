@@ -1,15 +1,15 @@
 # EcoMetrics
 
-Simulateur d'impact écologique pour projets IA (Outil d'aide à la décision GO / NO-GO).
+Ecological impact simulator for AI projects (GO / NO-GO decision tool).
 
 ## Installation
 
-Suivez ces étapes pour mettre en place l'environnement de développement.
+Follow these steps to set up the development environment.
 
-### 1. Cloner le dépôt
+### 1. Clone the repository
 
 ```bash
-git clone <URL_DU_DEPOT>
+git clone <REPO_URL>
 cd EcoMetrics
 ```
 
@@ -43,7 +43,7 @@ cp .env.example .env
 ### 5. Lancer l'application
 
 ```bash
-flask run
+streamlit run app.py
 ```
 
 L'application sera accessible à l'adresse `http://127.0.0.1:5000`.
