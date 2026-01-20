@@ -1,49 +1,36 @@
-# EcoMetrics
+# 🌱 EcoMetrics — AI Project Lifecycle Assessment
 
-Ecological impact simulator for AI projects (GO / NO-GO decision tool).
+EcoMetrics est un outil d'aide à la décision permettant d'estimer l'empreinte carbone et hydrique des projets d'IA sur l'ensemble de leur cycle de vie (Fabrication + Usage).
 
-## Installation
+## 🚀 Installation
 
-Follow these steps to set up the development environment.
+1. **Cloner le projet** et naviguer dans le dossier :
+   ```bash
+   cd EcoMetrics
+   ```
 
-### 1. Clone the repository
+2. **Créer un environnement virtuel** (recommandé) :
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # Sur Mac/Linux
+   # .venv\Scripts\activate   # Sur Windows
+   ```
 
+3. **Installer les dépendances** :
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## ▶️ Lancement
+
+Lancer l'application Streamlit :
 ```bash
-git clone <REPO_URL>
-cd EcoMetrics
+streamlit run app/main.py
 ```
 
-### 2. Créer et activer l'environnement virtuel
+## 📂 Structure
 
-- **macOS / Linux**
-  ```bash
-  python3 -m venv .venv
-  source .venv/bin/activate
-  ```
-- **Windows**
-  ```bash
-  python -m venv .venv
-  .\.venv\Scripts\activate
-  ```
-
-### 3. Installer les dépendances
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configurer les variables d'environnement
-
-Créez un fichier `.env` en copiant l'exemple.
-
-```bash
-cp .env.example .env
-```
-
-### 5. Lancer l'application
-
-```bash
-streamlit run app.py
-```
-
-L'application sera accessible à l'adresse `http://127.0.0.1:5000`.
+- `app/`: Code source de l'application.
+- `data/`: Stockage local des projets et hypothèses.
+- `old/`: Archives de l'ancien POC (référence).
+- `STD.md`: Documentation technique et méthodologie de calcul.
