@@ -1,177 +1,167 @@
 
-# SPÉCIFICATIONS TECHNIQUES : SOLUTION ECO-SCORE IA
+# SPÉCIFICATIONS TECHNIQUES DÉTAILLÉES (STD) — EcoMetrics
 
-- **Projet :** Simulateur d'impact écologique pour projets IA (Outil d'aide à la décision GO / NO-GO)
-- **Version :** 1.0
+- **Projet :** EcoMetrics — Calculateur d'Empreinte Carbone & Eau pour Projets IA
+- **Version :** 2.1 (Détail complet des paramètres et calculs)
 - **Date :** Janvier 2026
+- **Statut :** Validé pour implémentation
 
-## 1. VISION & OBJECTIFS
+## 1. OBJECTIFS DU SYSTÈME
 
-Développer une application web interactive permettant d'estimer l'empreinte carbone (kgCO₂e) d'un projet d'IA sur l'ensemble de son cycle de vie.
+L'outil a pour but de fournir une estimation "Cradle-to-Grave" (du berceau à la tombe) de l'impact environnemental d'un projet d'Intelligence Artificielle. Il couvre les phases de fabrication du matériel (Scope 3 amont), l'usage électrique (Scope 2) et la consommation d'eau.
 
-### Objectifs principaux :
+Il gère trois archétypes de projets :
+1.  **GenAI API (SaaS) :** Consommation basée sur les tokens (ex: GPT-4).
+2.  **Self-Hosted Inference :** Hébergement sur serveurs dédiés ou cloud (ex: Llama 3 sur AWS).
+3.  **Fine-Tuning / Training :** Entraînement de modèles spécifiques + Inférence.
 
-- **Notation intuitive :** Fournir un classement de A à G (type Nutri-Score) pour une lecture immédiate par les décideurs.
-- **Précision scientifique :** Fournir un calcul détaillé (Fabrication vs Usage) basé sur l'Analyse de Cycle de Vie (ACV).
-- **Simulation agile :** Permettre, via un tableau de bord, de modifier des paramètres (région, matériel, durée) afin de visualiser l'amélioration du score en temps réel.
+## 2. PARAMÈTRES UTILISATEUR (INPUTS)
 
-## 2. MODÈLE DE DONNÉES (CONSTANTES & RÉFÉRENCES)
+L'interface utilisateur permet de définir les variables suivantes.
 
-Ces données constituent la base du moteur de calcul. Elles doivent être stockées dans un fichier JSON ou une base de données.
+### 2.1 Contexte Général
+| Variable | Description | Type | Valeur par défaut |
+|---|---|---|---|
+| `Project Name` | Identifiant du projet | Texte | "New AI Project" |
+| `Project Type` | Archétype déterminant les sections visibles | Liste | "GenAI API (SaaS)" |
+| `Duration` | Durée d'exploitation du projet (pour l'amortissement) | Float (Années) | 2.0 ans |
 
-### 2.1 Hypothèses et valeurs par défaut
+### 2.2 Phase Entraînement (Si applicable)
+| Variable | Description | Unité | Valeur par défaut |
+|---|---|---|---|
+| `Training Region` | Lieu du datacenter d'entraînement | Liste (Pays) | "EU (avg)" |
+| `Hardware Model` | Type de GPU/TPU utilisé | Liste (Ref) | "NVIDIA A100 (80GB)" |
+| `GPU Count` | Nombre de cartes utilisées en parallèle | Entier | 8 |
+| `Training Hours` | Durée d'un cycle d'entraînement complet | Heures | 100.0 |
+| `Experimentation Factor` | Nombre d'essais (échecs, grid search) pour 1 succès | Entier | 1 (Pas d'erreur) |
 
+### 2.3 Phase Inférence (Production)
+
+**Configuration RAG (Optionnel)**
+| Variable | Description | Unité | Valeur par défaut |
+|---|---|---|---|
+| `Enable RAG` | Active le surcoût de récupération de contexte | Booléen | False |
+| `Chunks Retrieved` | Nombre de documents insérés dans le prompt | Entier | 3 |
+| `Chunk Size` | Taille moyenne d'un document récupéré | Tokens | 512 |
+
+**Mode A : SaaS / API**
+| Variable | Description | Unité | Valeur par défaut |
+|---|---|---|---|
+| `GenAI Model` | Modèle utilisé (facteur d'émission spécifique) | Liste | "GPT-3.5 Turbo" |
+| `Requests per Day` | Volume quotidien moyen | Entier | 1000 |
+| `Avg Tokens per Req` | Somme (Prompt + Génération) par requête | Entier | 1000 |
+
+**Mode B : Self-Hosted**
+| Variable | Description | Unité | Valeur par défaut |
+|---|---|---|---|
+| `Inference Region` | Lieu d'hébergement (souvent proche utilisateur) | Liste | "EU (avg)" |
+| `Hardware Model` | Type de GPU d'inférence | Liste | "NVIDIA T4" |
+| `GPU Count` | Nombre de cartes dédiées | Entier | 1 |
+| `Latency` | Temps de traitement moyen par requête | Secondes | 0.5 |
+
+### 2.4 Stockage & Réseau (Optionnel)
+| Variable | Description | Unité | Valeur par défaut |
+|---|---|---|---|
+| `Dataset Size` | Volume de données stockées (chaud) | GB | 50.0 |
+| `Data Transfer` | Volume transféré (In + Out) quotidien | GB/jour | 1.0 |
+
+## 3. DONNÉES DE RÉFÉRENCE (CONSTANTES)
+
+Ces valeurs sont définies dans le système (`app/constants.py`) mais modifiables dans les paramètres avancés.
+
+### 3.1 Hypothèses Globales
 | Constante | Valeur | Description |
 |---|---|---|
-| `DEFAULT_PUE_CLOUD` | 1.2 | Efficacité énergétique moyenne des hyperscalers |
-| `DEFAULT_PUE_ONPREM` | 1.6 | Efficacité énergétique moyenne datacenter entreprise |
-| `DEFAULT_CI_WORLD` | 475 gCO₂/kWh | Intensité carbone moyenne mondiale |
-| `DEFAULT_LIFESPAN_HARDWARE` | 4 ans | Durée de vie moyenne d'un serveur |
-| `DEFAULT_PROJECT_YEARS` | 2 ans | Durée de vie moyenne d'un projet IA |
-| `HOURS_PER_YEAR` | 8760 | Nombre d'heures dans une année |
+| `DEFAULT_PUE` | **1.2** | Power Usage Effectiveness (Standard Cloud Efficient) |
+| `HARDWARE_LIFESPAN` | **4.0 ans** | Durée d'amortissement comptable/physique |
+| `HOURS_PER_YEAR` | **8760** | 24h * 365j |
+| `WATER_INTENSITY` | **0.5 m³/MWh** | Moyenne mondiale (Scope 2 Water) |
 
-### 2.2 Base de données matériel (GPU / CPU)
+### 3.2 Facteurs d'Émission API (Estimations Recherche)
+| Modèle | Facteur (gCO₂e / 1000 tokens) |
+|---|---|
+| GPT-3.5 Turbo / Haiku | 0.008 |
+| Llama 3 70B (SaaS) | 0.04 |
+| Mistral Large | 0.06 |
+| GPT-4 / Opus / Ultra | 0.12 |
+| Embedding (Ada v2) | 0.001 |
 
-```json
-{
-  "hardware_list": [
-    { "id": "h100", "name": "NVIDIA H100", "tdp_watts": 700, "gwp_fabrication_kg": 2500 },
-    { "id": "a100", "name": "NVIDIA A100", "tdp_watts": 400, "gwp_fabrication_kg": 1500 },
-    { "id": "t4", "name": "NVIDIA T4", "tdp_watts": 70, "gwp_fabrication_kg": 200 },
-    { "id": "rtx4090", "name": "Consumer RTX 4090", "tdp_watts": 450, "gwp_fabrication_kg": 250 },
-    { "id": "cpu_server", "name": "CPU Server Standard", "tdp_watts": 200, "gwp_fabrication_kg": 800 }
-  ]
-}
-```
+### 3.3 Matériel de Référence (Extraits)
+| Modèle | TDP (Watts) | GWP Fabrication (kgCO₂e) |
+|---|---|---|
+| NVIDIA H100 | 700 | 2500 |
+| NVIDIA A100 | 400 | 1500 |
+| NVIDIA T4 | 70 | 200 |
+| CPU Server | 200 | 800 |
 
-### 2.3 Base de données géographique (intensité carbone)
+## 4. LOGIQUE DE CALCUL
 
-```json
-{
-  "regions": [
-    { "id": "fr", "name": "France", "ci_factor": 52 },
-    { "id": "us", "name": "USA (Moyenne)", "ci_factor": 367 },
-    { "id": "de", "name": "Allemagne", "ci_factor": 350 },
-    { "id": "se", "name": "Suède", "ci_factor": 45 },
-    { "id": "cn", "name": "Chine", "ci_factor": 550 },
-    { "id": "world", "name": "Moyenne mondiale", "ci_factor": 475 }
-  ]
-}
-```
+### 4.1 Phase Entraînement
 
-## 3. SCÉNARIO UTILISATEUR & QUESTIONNAIRE
+L'impact prend en compte la répétition des entraînements (essais/erreurs).
 
-Le formulaire est conditionnel et n'affiche que les questions nécessaires.
+1.  **Temps Total (h)** = `Training_Hours` × `Experimentation_Factor`
+2.  **Énergie (kWh)** = (`TDP_kW` × `GPU_Count` × `Temps Total` × `PUE`)
+3.  **CO₂ Usage (kg)** = `Énergie` × `Grid_Intensity_Train`
+4.  **CO₂ Fabrication (kg)** = `GPU_Count` × `GWP_Unit` × (`Temps Total` / (`LIFESPAN` × 8760))
+    *Note : On amortit la fabrication au prorata du temps d'utilisation réel des GPU.*
 
-### Phase 1 — Profil du projet
+### 4.2 Phase Inférence
 
-**Q1. Nature du projet**
+#### Cas A : Mode SaaS / API
+Le calcul est basé sur une estimation par token (proxy de la complexité de calcul).
 
-- A — Utilisation d'une API (OpenAI, Claude…) → Entraînement masqué
-- B — Inférence pure (modèle pré‑entraîné) → Entraînement masqué
-- C — Fine‑tuning / ré‑entraînement → Entraînement activé
-- D — Entraînement complet (from scratch) → Entraînement activé
+1.  **Tokens par Requête** = `Avg_Tokens` + (Si RAG: `Chunks` × `Chunk_Size`)
+2.  **Volume Annuel** = `Requests_Day` × 365 × `Tokens par Requête`
+3.  **CO₂ Annuel (kg)** = (`Volume Annuel` / 1000) × `API_Emission_Factor`
+4.  **Total Projet** = `CO₂ Annuel` × `Duration_Years`
 
-**Q2. Durée de vie estimée du projet**
-- Nombre d'années (défaut : 2)
+#### Cas B : Mode Self-Hosted
+Le calcul est basé sur le temps d'occupation machine.
 
-### Phase 2 — Entraînement (si C ou D)
+1.  **Temps Calcul Annuel (h)** = (`Requests_Day` × `Latency_Sec` / 3600) × 365
+2.  **Énergie Annuelle (kWh)** = `TDP_kW` × `GPU_Count` × `Temps Calcul Annuel` × `PUE`
+3.  **CO₂ Usage Total (kg)** = `Énergie Annuelle` × `Grid_Intensity_Inf` × `Duration_Years`
+4.  **CO₂ Fabrication Total (kg)** = `GPU_Count` × `GWP_Unit` × (`Duration_Years` / `LIFESPAN`)
+    *Note : Ici, on amortit sur la durée du projet (réservation de capacité), plafonné à 100% du matériel.*
 
-**Q3. Région d'entraînement**
-- Liste déroulante (pays)
+### 4.3 Stockage & Réseau
 
-**Q4. Matériel utilisé**
-- Liste ou Autre / Je ne sais pas
-- Consommation (W) — défaut : 400 W
-- Nombre de puces
+1.  **Énergie Stockage (kWh)** = `Dataset_GB` × 0.0012 (kWh/GB/an) × `PUE` × `Duration_Years`
+2.  **CO₂ Stockage** = `Énergie Stockage` × `Grid_Intensity_World` (Moyenne globale par défaut)
+3.  **CO₂ Réseau** = `Transfer_GB_Day` × 365 × `Duration_Years` × 0.005 (kgCO₂/GB)
 
-**Q5. Durée de l'entraînement**
-- Heures totales de calcul
+### 4.4 Eau (Water Footprint)
 
-### Phase 3 — Inférence & production (obligatoire)
+Calculé sur le Scope 2 (Eau nécessaire à la production électrique et au refroidissement).
+**Total Eau (m³)** = `Total Énergie (MWh)` × `WATER_INTENSITY (m³/MWh)`
 
-**Q6. Région d'hébergement (production)**
+## 5. RÉSULTATS & KPIs
 
-**Q7. Matériel en production**
+### 5.1 Indicateurs Principaux
+- **Total CO₂ (kg)** : Somme de toutes les phases.
+- **Total Énergie (kWh)** : Consommation électrique cumulée.
+- **Total Eau (m³)** : Consommation d'eau cumulée.
+- **Impact Annuel (kgCO₂/an)** : Total / Durée du projet.
 
-**Q8. Trafic estimé**
-- Requêtes / jour
-- Temps par requête (s)
-  - Texte : 0.2 s
-  - LLM chat : 2 s
-  - Image : 4 s
+### 5.2 Score Écologique
+Note de A à G calculée par une formule logarithmique pondérée :
+- **Score CO₂ (0-100)** : `100 - 20 * log10(Total_CO2)`
+- **Score Eau (0-100)** : `100 - 20 * log10(Total_Water * 10)`
+- **Score Final** : `0.7 * Score_CO2 + 0.3 * Score_Eau`
 
-## 4. ALGORITHME DE CALCUL
+| Grade | Impact CO₂ (kg) | Référence |
+|---|---|---|
+| **A** | < 50 | Ampoule / an |
+| **B** | < 250 | TGV Paris-Marseille |
+| **C** | < 1,000 | Smartphone |
+| **D** | < 5,000 | Vol Paris-NY |
+| **E** | < 20,000 | Voiture thermique / an |
+| **F** | < 100,000 | PME |
+| **G** | > 100,000 | Industriel |
 
-### 4.1 Variables normalisées
-
-- **PUE :** efficacité datacenter
-- **CI :** intensité carbone (gCO₂/kWh)
-- **W_gpu :** puissance GPU (W)
-- **N_gpu :** nombre de GPU
-- **GWP_unit :** empreinte fabrication unitaire (kgCO₂e)
-
-### 4.2 Formules
-
-#### Impact entraînement
-
-```
-# Énergie consommée (kWh)
-E_training_kWh = (W_gpu * N_gpu * T_training_hours * PUE) / 1000
-
-# Impact usage (kgCO₂e)
-Usage_training_kgCO2e = E_training_kWh * (CI / 1000)
-
-# Impact fabrication (kgCO₂e)
-Fab_training_kgCO2e = N_gpu * GWP_unit * (T_training_hours / (DEFAULT_LIFESPAN_HARDWARE * HOURS_PER_YEAR))
-
-# Total
-Impact_training_kgCO2e = Usage_training_kgCO2e + Fab_training_kgCO2e
-```
-
-#### Impact inférence
-
-```
-# Temps de calcul total sur la durée du projet (heures)
-T_inference_hours = (Requests_per_day * Time_per_request_s / 3600) * 365 * DEFAULT_PROJECT_YEARS
-
-# Énergie consommée (kWh)
-E_inference_kWh = (W_gpu * N_gpu * T_inference_hours * PUE) / 1000
-
-# Impact usage (kgCO₂e)
-Usage_inference_kgCO2e = E_inference_kWh * (CI / 1000)
-
-# Impact fabrication (kgCO₂e)
-Fab_inference_kgCO2e = N_gpu * GWP_unit * ( (DEFAULT_PROJECT_YEARS * HOURS_PER_YEAR) / (DEFAULT_LIFESPAN_HARDWARE * HOURS_PER_YEAR) )
-
-# Total
-Impact_inference_kgCO2e = Usage_inference_kgCO2e + Fab_inference_kgCO2e
-```
-
-## 5. SYSTÈME DE NOTATION
-
-| Grade | Couleur | Impact total | Référence |
-|---|---|---|---|
-| A | Vert foncé | 0 – 50 kg | Ampoule / an |
-| B | Vert clair | 50 – 250 kg | Paris–Marseille (TGV) |
-| C | Jaune | 250 kg – 1 t | Smartphone |
-| D | Orange | 1 – 5 t | Paris–New York |
-| E | Orange foncé | 5 – 20 t | Voiture |
-| F | Rouge | 20 – 100 t | 20 Français / an |
-| G | Bordeaux | > 100 t | Industriel |
-
-## 6. DASHBOARD & SIMULATION
-
-- **Visualisation**
-  - Jauge de score
-  - Donut de répartition
-- **Simulation What‑If**
-  - Région serveur
-  - Durée de vie du projet
-  - Mode optimisé (−30 % GPU, −20 % latence)
-
-## 7. MOTEUR DE RECOMMANDATIONS
-
-- **Électricité carbonée :** CI > 200 → changer de région
-- **Matériel surdimensionné :** Fabrication > usage → réduire le hardware
-- **Explosion de l'inférence :** Inférence > 10× entraînement → optimisation, cache, distillation
+## 6. ARCHITECTURE TECHNIQUE
+- **Langage :** Python 3.10+
+- **Interface :** Streamlit
+- **Données :** Fichiers JSON (pas de BDD SQL pour la portabilité)
+- **Visualisation :** Plotly Express

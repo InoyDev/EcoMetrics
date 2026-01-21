@@ -1,6 +1,7 @@
 # app/main.py
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # Add project root to sys.path to allow 'app' module imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -10,10 +11,10 @@ import pandas as pd
 import plotly.express as px
 from pydantic import ValidationError
 
-from app.models import ProjectInputs, Assumptions
+from app.models import ProjectInputs, Assumptions, FootprintResult
 from app.calculator import compute_footprint, calculate_score
-from app.utils import load_projects, save_project
-from app.constants import HARDWARE_DATA, DEFAULT_GRID_INTENSITY
+from app.utils import load_projects, save_project, delete_project, save_custom_row
+from app.constants import HARDWARE_CATALOG, PROJECT_TYPES, INFRASTRUCTURE_PROFILES, DEFAULT_GRID_INTENSITY, API_MODELS
 
 st.set_page_config(page_title="EcoMetrics", layout="wide", page_icon="🌱")
 
@@ -21,7 +22,9 @@ st.set_page_config(page_title="EcoMetrics", layout="wide", page_icon="🌱")
 with st.sidebar:
     st.title("🌱 EcoMetrics")
     st.caption("AI Lifecycle Assessment Tool")
-    page = st.radio("Navigation", ["Project Profile", "Infrastructure", "Usage", "Results", "Compare"])
+    # Simplified Navigation
+    page = st.radio("Navigation", ["Calculator", "Compare Projects"])
+    expert_mode = st.checkbox("Expert Mode", value=False, help="Show all configurations manually without simplified logic.")
     st.divider()
     
     with st.expander("⚙️ Advanced Settings (Assumptions)"):
@@ -33,106 +36,158 @@ with st.sidebar:
 if "inputs" not in st.session_state:
     st.session_state["inputs"] = ProjectInputs().model_dump()
 
-def update_input(section, key, value):
+def update_input(section, key, widget_key):
+    val = st.session_state[widget_key]
     if section:
-        st.session_state["inputs"][section][key] = value
+        st.session_state["inputs"][section][key] = val
     else:
-        st.session_state["inputs"][key] = value
+        st.session_state["inputs"][key] = val
+
+def get_filtered_hardware(p_type):
+    # Filter hardware based on project type for better UX
+    if p_type == "ml_classic":
+        return [h for h in HARDWARE_CATALOG if h["type"] == "cpu"]
+    return HARDWARE_CATALOG
 
 inputs_data = st.session_state["inputs"]
 
-# --- PAGE 1: Project Profile ---
-if page == "Project Profile":
-    st.header("1. Project Profile")
-    st.markdown("Define the identity and the expected lifespan of the project.")
-    c1, c2 = st.columns(2)
+# --- PAGE: Calculator ---
+if page == "Calculator":
+    st.header("Project Carbon Calculator")
+    
+    # --- STEP 1: GLOBAL PROFILE ---
+    st.subheader("1. Global Profile")
+    c1, c2, c3 = st.columns(3)
     with c1:
-        val = st.text_input("Project Name", value=inputs_data["project_name"], help="A unique name to identify this simulation.")
-        update_input(None, "project_name", val)
-        val = st.text_input("Owner / Team", value=inputs_data["owner"], help="The team or department responsible for this project.")
-        update_input(None, "owner", val)
+        st.text_input("Project Name", value=inputs_data["project_name"], key="p_name", on_change=update_input, args=(None, "project_name", "p_name"), help="A unique name to identify this simulation.")
+        st.selectbox("Project Environment", ["Dev/PoC", "Production"], index=0 if inputs_data["environment"] == "Dev/PoC" else 1, key="p_env", on_change=update_input, args=(None, "environment", "p_env"), help="Categorizes the project context. 'Dev/PoC' implies short-term experiments, while 'Production' implies long-term deployment.")
     with c2:
-        val = st.number_input("Project Duration (years)", value=float(inputs_data["project_duration_years"]), min_value=0.1, step=0.5, help="How long will this project run? This is crucial to calculate the share of hardware manufacturing (amortization) attributed to this project.")
-        update_input(None, "project_duration_years", val)
+        # Project Type Selection
+        p_types = list(PROJECT_TYPES.keys())
+        p_labels = [PROJECT_TYPES[k] for k in p_types]
+        curr_type = inputs_data["project_type"]
+        idx = p_types.index(curr_type) if curr_type in p_types else 2
+        
+        def update_type():
+            st.session_state["inputs"]["project_type"] = st.session_state["p_type_sel"]
+            
+        st.selectbox("Project Type", p_types, format_func=lambda x: PROJECT_TYPES[x], index=idx, key="p_type_sel", on_change=update_type, help="Select the archetype that best fits your project:\n- **Classic ML**: Low compute, often CPU-based (e.g., XGBoost).\n- **Deep Learning**: High compute, GPU-based training (e.g., ResNet, BERT).\n- **GenAI**: Large Language Models, either via API or self-hosted.")
+        
+    with c3:
+        st.number_input("Project Duration (years)", value=float(inputs_data["project_duration_years"]), min_value=0.1, step=0.5, key="p_duration", on_change=update_input, args=(None, "project_duration_years", "p_duration"), help="How long will this project run? This is crucial to calculate the share of hardware manufacturing (amortization) attributed to this project.")
     
-    amortization_pct = min(100, (val/assumptions.hardware_lifespan_years)*100)
-    st.info(f"ℹ️ A project duration of **{val} years** means you are responsible for **{amortization_pct:.0f}%** of the hardware's manufacturing carbon footprint (based on a {assumptions.hardware_lifespan_years}-year server lifespan).")
-
-# --- PAGE 2: Infrastructure ---
-elif page == "Infrastructure":
-    st.header("2. Infrastructure & Hardware")
-    col_infra, col_hw = st.columns(2)
-    with col_infra:
-        st.subheader("Location & Efficiency")
-        curr_region = inputs_data["infra"]["region"]
-        
-        # Region Selection
-        new_region = st.selectbox("Region", list(DEFAULT_GRID_INTENSITY.keys()), index=list(DEFAULT_GRID_INTENSITY.keys()).index(curr_region) if curr_region in DEFAULT_GRID_INTENSITY else 0)
-        update_input("infra", "region", new_region)
-        
-        # Auto-update Grid Intensity (Disabled/Read-only)
-        intensity = float(DEFAULT_GRID_INTENSITY[new_region])
-        update_input("infra", "grid_intensity_g_per_kwh", intensity)
-        st.number_input("Grid Intensity (gCO2e/kWh)", value=intensity, disabled=True, help="Carbon intensity of the electricity grid in the selected region. Automatically determined by the region.")
-        
-        # PUE
-        pue = st.number_input("PUE (Power Usage Effectiveness)", value=float(inputs_data["infra"]["pue"]), min_value=1.0, step=0.1, help="Ratio of total facility energy to IT equipment energy. 1.0 is ideal (no cooling cost). 1.2 is very efficient (Hyperscale Cloud). 1.6 is average on-premise.")
-        update_input("infra", "pue", pue)
-    with col_hw:
-        st.subheader("Hardware Specs Reference")
-        st.dataframe(pd.DataFrame(HARDWARE_DATA).T.style.format("{:.2f}"), use_container_width=True)
-        st.caption("Reference values for Power (TDP) and Manufacturing Impact (GWP).")
-
-# --- PAGE 3: Usage ---
-elif page == "Usage":
-    st.header("3. Usage & Compute")
-    tab_train, tab_infer, tab_store = st.tabs(["Training", "Inference", "Storage"])
-    
-    with tab_train:
-        do_train = st.checkbox("Include Training Phase", value=inputs_data["training"]["include_training"])
-        update_input("training", "include_training", do_train)
-        if do_train:
-            c1, c2 = st.columns(2)
-            with c1:
-                hw = st.selectbox("Hardware Model", list(HARDWARE_DATA.keys()), index=list(HARDWARE_DATA.keys()).index(inputs_data["training"]["hardware_model"]), help="The GPU or TPU model used for training.")
-                update_input("training", "hardware_model", hw)
-                cnt = st.number_input("Count (GPUs)", value=int(inputs_data["training"]["hardware_count"]), min_value=1, help="Number of GPUs used in parallel.")
-                update_input("training", "hardware_count", cnt)
-            with c2:
-                hrs = st.number_input("Total Training Duration (hours)", value=float(inputs_data["training"]["train_hours"]), min_value=0.0, help="Total computation time in hours.")
-                update_input("training", "train_hours", hrs)
-
-    with tab_infer:
-        do_inf = st.checkbox("Include Inference Phase", value=inputs_data["inference"]["include_inference"])
-        update_input("inference", "include_inference", do_inf)
-        if do_inf:
-            mode = st.radio("Calculation Mode", ["SaaS / API", "Self-Hosted"], index=0 if inputs_data["inference"]["mode"] == "SaaS / API" else 1, help="Choose 'SaaS / API' if you use a provider like OpenAI (Token based). Choose 'Self-Hosted' if you manage your own servers (Time/Hardware based).")
-            update_input("inference", "mode", mode)
-            reqs = st.number_input("Requests per Day", value=int(inputs_data["inference"]["req_per_day"]), min_value=1, help="Average number of queries/prompts processed daily.")
-            update_input("inference", "req_per_day", reqs)
-            if mode == "SaaS / API":
-                tok = st.number_input("Avg Tokens per Request", value=int(inputs_data["inference"]["tokens_per_req"]), help="Sum of Input + Output tokens per request.")
-                update_input("inference", "tokens_per_req", tok)
+    # --- PIVOT QUESTION (Training Phase Visibility) ---
+    if not expert_mode:
+        st.markdown("---")
+        if inputs_data["project_type"] == "genai":
+            # GenAI Logic: SaaS vs Fine-Tuning
+            genai_mode = st.radio("GenAI Implementation Strategy", ["Use existing API (SaaS)", "Fine-Tuning / Self-Hosted"], index=0, horizontal=True, help="SaaS API implies no training phase impact for you.")
+            if genai_mode == "Use existing API (SaaS)":
+                st.session_state["inputs"]["training"]["include_training"] = False
+                # Optional: Auto-set inference mode to SaaS
+                # st.session_state["inputs"]["inference"]["mode"] = "SaaS / API"
             else:
-                hw_inf = st.selectbox("Inference Hardware", list(HARDWARE_DATA.keys()), key="inf_hw", index=list(HARDWARE_DATA.keys()).index(inputs_data["inference"]["hardware_model"]), help="The hardware used for serving the model.")
-                update_input("inference", "hardware_model", hw_inf)
-                cnt_inf = st.number_input("Hardware Count", value=int(inputs_data["inference"]["hardware_count"]), min_value=1, key="inf_cnt", help="Number of GPUs dedicated to inference.")
-                update_input("inference", "hardware_count", cnt_inf)
-                lat = st.number_input("Avg Latency (s)", value=float(inputs_data["inference"]["latency_per_req_s"]), min_value=0.01, help="Time taken to process one request (in seconds).")
-                update_input("inference", "latency_per_req_s", lat)
+                st.session_state["inputs"]["training"]["include_training"] = True
+        else:
+            # ML / DL Logic: Ask explicitly
+            train_q = st.radio("Do you have a Training or Fine-tuning phase?", ["Yes", "No (Inference Only)"], index=0, horizontal=True)
+            if train_q == "No (Inference Only)":
+                st.session_state["inputs"]["training"]["include_training"] = False
+            else:
+                st.session_state["inputs"]["training"]["include_training"] = True
+    else:
+        st.markdown("---")
 
-    with tab_store:
-        do_sn = st.checkbox("Include Storage & Network", value=inputs_data["storage_network"]["include_storage_network"])
-        update_input("storage_network", "include_storage_network", do_sn)
-        if do_sn:
-            gb = st.number_input("Dataset Size (GB)", value=float(inputs_data["storage_network"]["dataset_gb"]), help="Total volume of data stored (Datasets + Models).")
-            update_input("storage_network", "dataset_gb", gb)
-            tr = st.number_input("Data Transfer (GB/day)", value=float(inputs_data["storage_network"]["transfer_gb_per_day"]), help="Average daily data transfer (Inbound + Outbound).")
-            update_input("storage_network", "transfer_gb_per_day", tr)
+    # --- STEP 2: DEVELOPMENT & TRAINING ---
+    st.subheader("2. Development & Training (MLOps)")
+    
+    # Development Phase
+    st.markdown("**🛠️ Development Phase (Exploration)**")
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        st.selectbox("Dev Infrastructure", list(INFRASTRUCTURE_PROFILES.keys()), format_func=lambda x: INFRASTRUCTURE_PROFILES[x]["name"], index=list(INFRASTRUCTURE_PROFILES.keys()).index(inputs_data["development"]["infra_type"]), key="d_infra", on_change=update_input, args=("development", "infra_type", "d_infra"), help="The environment where development takes place. Affects energy efficiency (PUE). 'Local' = 1.0, 'Cloud' = 1.2.")
+    with d2:
+        # Filter hardware for Dev (mostly laptops/CPU)
+        dev_hw_opts = [h for h in HARDWARE_CATALOG if h["type"] == "cpu" or "laptop" in h["id"]]
+        dev_hw_ids = [h["id"] for h in dev_hw_opts]
+        curr_dev_hw = inputs_data["development"]["hardware_id"]
+        st.selectbox("Dev Hardware", dev_hw_ids, format_func=lambda x: next((h["name"] for h in dev_hw_opts if h["id"] == x), x), index=dev_hw_ids.index(curr_dev_hw) if curr_dev_hw in dev_hw_ids else 0, key="d_hw", on_change=update_input, args=("development", "hardware_id", "d_hw"), help="The primary hardware used by data scientists. Laptops have high embodied carbon relative to their energy usage.")
+    with d3:
+        st.number_input("Dev Hours (Coding/Testing)", value=float(inputs_data["development"]["dev_hours"]), min_value=0.0, step=10.0, key="d_hours", on_change=update_input, args=("development", "dev_hours", "d_hours"), help="Total estimated hours spent by the team on exploration, coding, and debugging.")
+    
+    # Training (Conditional)
+    if expert_mode:
+        st.checkbox("Include Training Phase", value=inputs_data["training"]["include_training"], key="exp_train_toggle", on_change=update_input, args=("training", "include_training", "exp_train_toggle"))
 
-# --- PAGE 4: Results ---
-elif page == "Results":
-    st.header("4. Results & Analysis")
+    if inputs_data["training"]["include_training"]:
+        st.markdown("**🏋️ Training Phase (Runs)**")
+        t_c1, t_c2, t_c3, t_c4 = st.columns(4)
+        
+        # Filter Hardware based on Project Type
+        train_hw_opts = get_filtered_hardware(inputs_data["project_type"])
+        train_hw_ids = [h["id"] for h in train_hw_opts]
+        curr_train_hw = inputs_data["training"]["hardware_id"]
+        
+        with t_c1:
+            st.selectbox("Training Region", list(DEFAULT_GRID_INTENSITY.keys()), index=list(DEFAULT_GRID_INTENSITY.keys()).index(inputs_data["training"]["region"]), key="t_reg", on_change=update_input, args=("training", "region", "t_reg"), help="The geographical location of the datacenter. This determines the carbon intensity of the electricity (gCO2e/kWh).")
+            st.selectbox("Training Infra", list(INFRASTRUCTURE_PROFILES.keys()), format_func=lambda x: INFRASTRUCTURE_PROFILES[x]["name"], index=list(INFRASTRUCTURE_PROFILES.keys()).index(inputs_data["training"]["infra_type"]), key="t_infra", on_change=update_input, args=("training", "infra_type", "t_infra"), help="The facility type. Cloud datacenters are typically more energy-efficient (lower PUE) than average on-premise server rooms.")
+        with t_c2:
+            st.selectbox("Training Hardware", train_hw_ids, format_func=lambda x: next((h["name"] for h in train_hw_opts if h["id"] == x), x), index=train_hw_ids.index(curr_train_hw) if curr_train_hw in train_hw_ids else 0, key="t_hw", on_change=update_input, args=("training", "hardware_id", "t_hw"), help="The GPU/TPU model used. High-end GPUs (e.g., A100) consume more power and have a higher manufacturing footprint.")
+            st.number_input("Device Count", value=int(inputs_data["training"]["hardware_count"]), min_value=1, key="t_count", on_change=update_input, args=("training", "hardware_count", "t_count"), help="Number of GPUs running in parallel during a training session.")
+        with t_c3:
+            st.number_input("Duration per Run (hours)", value=float(inputs_data["training"]["duration_run_hours"]), min_value=0.0, key="t_dur", on_change=update_input, args=("training", "duration_run_hours", "t_dur"), help="Time taken to complete one full training run (in hours).")
+        with t_c4:
+            st.selectbox("Frequency", ["One-off", "Weekly", "Monthly", "Daily"], index=["One-off", "Weekly", "Monthly", "Daily"].index(inputs_data["training"]["frequency"]), key="t_freq", on_change=update_input, args=("training", "frequency", "t_freq"), help="How often is the model retrained? This multiplies the training impact over the project duration.")
+
+    # --- STEP 3: INFERENCE ---
+    st.subheader("3. Inference / Production")
+    
+    # Logic: GenAI can be SaaS or Self-Hosted. ML/DL is always Compute (Self-Hosted logic).
+    is_genai = inputs_data["project_type"] == "genai"
+    
+    if is_genai:
+        st.radio("Inference Mode", ["SaaS / API", "Self-Hosted"], index=0 if inputs_data["inference"]["mode"] == "SaaS / API" else 1, key="inf_mode", on_change=update_input, args=("inference", "mode", "inf_mode"), help="**SaaS/API**: Emissions calculated based on token volume (Black-box).\n**Self-Hosted**: Emissions calculated based on hardware power and active time (White-box).")
+
+    if is_genai and inputs_data["inference"]["mode"] == "SaaS / API":
+        # SaaS Flow
+        i_c1, i_c2 = st.columns(2)
+        with i_c1:
+            curr_model = inputs_data["inference"]["api_model"]
+            st.selectbox("GenAI Model", list(API_MODELS.keys()), index=list(API_MODELS.keys()).index(curr_model) if curr_model in API_MODELS else 0, key="inf_model", on_change=update_input, args=("inference", "api_model", "inf_model"), help="The specific model used. Larger models (e.g., GPT-4) require more energy per token than smaller ones (e.g., Haiku).")
+            st.number_input("Requests per Day", value=int(inputs_data["inference"]["req_per_day"]), min_value=1, key="inf_reqs", on_change=update_input, args=("inference", "req_per_day", "inf_reqs"), help="Average number of API calls per day.")
+        with i_c2:
+            st.number_input("Avg Tokens per Request", value=int(inputs_data["inference"]["tokens_per_req"]), key="inf_tokens", on_change=update_input, args=("inference", "tokens_per_req", "inf_tokens"), help="Sum of Input (Prompt) and Output (Completion) tokens. 1k tokens ≈ 750 words.")
+    else:
+        # Compute Flow (ML/DL or Self-Hosted GenAI)
+        i_c1, i_c2, i_c3 = st.columns(3)
+        
+        # Filter Hardware for Inference
+        inf_hw_opts = get_filtered_hardware(inputs_data["project_type"])
+        inf_hw_ids = [h["id"] for h in inf_hw_opts]
+        curr_inf_hw = inputs_data["inference"]["hardware_id"]
+
+        with i_c1:
+            st.selectbox("Inference Region", list(DEFAULT_GRID_INTENSITY.keys()), index=list(DEFAULT_GRID_INTENSITY.keys()).index(inputs_data["inference"]["region"]), key="inf_reg", on_change=update_input, args=("inference", "region", "inf_reg"), help="Location of the production servers. Choosing a low-carbon region (e.g., France, Sweden) is the most effective way to reduce usage emissions.")
+            st.selectbox("Inference Infra", list(INFRASTRUCTURE_PROFILES.keys()), format_func=lambda x: INFRASTRUCTURE_PROFILES[x]["name"], index=list(INFRASTRUCTURE_PROFILES.keys()).index(inputs_data["inference"]["infra_type"]), key="inf_infra", on_change=update_input, args=("inference", "infra_type", "inf_infra"), help="Facility efficiency for production.")
+        with i_c2:
+            st.selectbox("Inference Hardware", inf_hw_ids, format_func=lambda x: next((h["name"] for h in inf_hw_opts if h["id"] == x), x), index=inf_hw_ids.index(curr_inf_hw) if curr_inf_hw in inf_hw_ids else 0, key="inf_hw", on_change=update_input, args=("inference", "hardware_id", "inf_hw"), help="The hardware used to serve requests.")
+            st.number_input("Device Count", value=int(inputs_data["inference"]["hardware_count"]), min_value=1, key="inf_cnt", on_change=update_input, args=("inference", "hardware_count", "inf_cnt"), help="Number of GPUs/Servers provisioned for inference.")
+            st.checkbox("Server Always On (24/7)?", value=inputs_data["inference"]["server_24_7"], key="inf_247", on_change=update_input, args=("inference", "server_24_7", "inf_247"), help="If checked, energy is counted for 8760h/year. If unchecked, only active compute time is counted (Serverless/On-Demand).")
+        with i_c3:
+            st.number_input("Requests per Day", value=int(inputs_data["inference"]["req_per_day"]), min_value=1, key="inf_reqs", on_change=update_input, args=("inference", "req_per_day", "inf_reqs"), help="Daily traffic volume.")
+            # Default latency based on type
+            default_lat = 100.0 if inputs_data["project_type"] != "genai" else 2000.0
+            st.number_input("Avg Latency (ms)", value=float(inputs_data["inference"]["latency_ms"]), min_value=1.0, step=10.0, key="inf_lat", on_change=update_input, args=("inference", "latency_ms", "inf_lat"), help="Average time to process one request. Used to calculate the total 'Active Compute Time' per year.")
+
+    # Storage (Expander)
+    with st.expander("💾 Storage & Network (Optional)"):
+        if st.checkbox("Include Storage & Network", value=inputs_data["storage_network"]["include_storage_network"], key="sn_include", on_change=update_input, args=("storage_network", "include_storage_network", "sn_include")):
+            st.number_input("Dataset Size (GB)", value=float(inputs_data["storage_network"]["dataset_gb"]), key="sn_gb", on_change=update_input, args=("storage_network", "dataset_gb", "sn_gb"), help="Total volume of data stored (Datasets + Models).")
+            st.number_input("Data Transfer (GB/day)", value=float(inputs_data["storage_network"]["transfer_gb_per_day"]), key="sn_tr", on_change=update_input, args=("storage_network", "transfer_gb_per_day", "sn_tr"), help="Average daily data transfer (Inbound + Outbound).")
+
+    # --- Results ---
+    st.divider()
+    st.header("Results & Analysis")
     try:
         inputs_obj = ProjectInputs(**inputs_data)
         res = compute_footprint(inputs_obj, assumptions)
@@ -157,9 +212,9 @@ elif page == "Results":
 
         st.subheader("Detailed Breakdown")
         breakdown_data = {
-            "Phase": ["Training", "Training", "Inference", "Inference", "Storage/Network"],
-            "Type": ["Usage", "Embodied", "Usage", "Embodied", "Usage"],
-            "CO2 (kg)": [res.co2_training_usage, res.co2_training_embodied, res.co2_inference_usage, res.co2_inference_embodied, res.co2_storage_network]
+            "Phase": ["Development", "Training", "Training", "Inference", "Inference", "Storage/Network"],
+            "Type": ["Total", "Usage", "Embodied", "Usage", "Embodied", "Usage"],
+            "CO2 (kg)": [res.co2_dev, res.co2_training_usage, res.co2_training_embodied, res.co2_inference_usage, res.co2_inference_embodied, res.co2_storage_network]
         }
         df_chart = pd.DataFrame(breakdown_data)
         fig = px.bar(df_chart, x="Phase", y="CO2 (kg)", color="Type", title="CO₂ Impact by Phase & Scope")
@@ -172,23 +227,106 @@ elif page == "Results":
     except ValidationError as e:
         st.error(f"Input Validation Error: {e}")
 
-# --- PAGE 5: Compare ---
-elif page == "Compare":
-    st.header("5. Compare Projects")
+# --- PAGE: Compare ---
+elif page == "Compare Projects":
+    st.header("Compare Projects")
     df = load_projects()
     if df.empty:
         st.info("No saved projects yet.")
     else:
-        st.dataframe(df, use_container_width=True)
+        # --- 1. Display Projects (Formatted) ---
+        display_df = df.copy()
+        
+        # Format Date
+        if "timestamp" in display_df.columns:
+            display_df["timestamp"] = pd.to_datetime(display_df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M")
+
+        # Rename Columns for readability
+        column_map = {
+            "project_name": "Project Name",
+            "project_type": "Type",
+            "environment": "Env",
+            "project_duration_years": "Duration (y)",
+            "total_co2_kg": "Total CO2 (kg)",
+            "total_energy_kwh": "Total Energy (kWh)",
+            "total_water_m3": "Total Water (m³)",
+            "score_grade": "Grade",
+            "score_100": "Score (/100)",
+            "timestamp": "Date Created"
+        }
+        
+        # Select and rename columns that exist in the dataframe
+        cols_to_show = [c for c in column_map.keys() if c in display_df.columns]
+        st.dataframe(display_df[cols_to_show].rename(columns=column_map), use_container_width=True)
+
+        # --- 2. Comparison Logic ---
         if len(df) >= 2:
-            st.subheader("Comparison")
+            st.divider()
+            st.subheader("⚔️ Side-by-Side Comparison")
             projects = df["project_name"].unique()
-            p1 = st.selectbox("Project A", projects, index=0)
-            p2 = st.selectbox("Project B", projects, index=1)
+            c_comp1, c_comp2 = st.columns(2)
+            p1 = c_comp1.selectbox("Project A", projects, index=0)
+            p2 = c_comp2.selectbox("Project B", projects, index=1 if len(projects) > 1 else 0)
+            
             if p1 and p2:
+                # Get latest entry for selected projects
                 row1 = df[df["project_name"] == p1].iloc[-1]
                 row2 = df[df["project_name"] == p2].iloc[-1]
-                col1, col2, col3 = st.columns(3)
-                col1.metric("CO₂ Total (A)", f"{row1['total_co2_kg']:.0f} kg")
-                col2.metric("CO₂ Total (B)", f"{row2['total_co2_kg']:.0f} kg")
-                col3.metric("Delta (B - A)", f"{row2['total_co2_kg'] - row1['total_co2_kg']:+.0f} kg")
+                
+                k1, k2, k3 = st.columns(3)
+                k1.metric(f"{p1} (CO₂)", f"{row1['total_co2_kg']:.0f} kg")
+                k2.metric(f"{p2} (CO₂)", f"{row2['total_co2_kg']:.0f} kg")
+                delta = row2['total_co2_kg'] - row1['total_co2_kg']
+                k3.metric("Delta (B - A)", f"{delta:+.0f} kg", delta_color="inverse")
+
+        # --- 3. Complex Project Creation ---
+        st.divider()
+        st.subheader("🧩 Create Complex Project (Aggregation)")
+        st.caption("Combine multiple existing projects (e.g., a Training project + an Inference project) into a single aggregated result.")
+        
+        projects_list = df["project_name"].unique()
+        selected_projects = st.multiselect("Select projects to combine", projects_list)
+        new_complex_name = st.text_input("New Complex Project Name", value="Combined Project")
+        
+        if st.button("Merge & Save Complex Project"):
+            if len(selected_projects) < 2:
+                st.error("Please select at least 2 projects to combine.")
+            elif not new_complex_name:
+                st.error("Please provide a name for the complex project.")
+            else:
+                # Filter and Sum
+                sub_df = df[df["project_name"].isin(selected_projects)]
+                # Columns to sum
+                sum_cols = ['total_co2_kg', 'total_energy_kwh', 'total_water_m3', 'co2_dev', 'co2_training_usage', 'co2_training_embodied', 'co2_inference_usage', 'co2_inference_embodied', 'co2_storage_network', 'annual_co2_kg']
+                # Ensure columns exist (fill 0 if missing)
+                for c in sum_cols:
+                    if c not in sub_df.columns: sub_df[c] = 0.0
+                
+                aggregated = sub_df[sum_cols].sum()
+                
+                # Recalculate Score
+                # We create a dummy FootprintResult with summed values
+                fp_agg = FootprintResult(**aggregated.to_dict())
+                score_agg = calculate_score(fp_agg)
+                
+                # Create new row
+                new_row = aggregated.to_dict()
+                new_row["project_name"] = new_complex_name
+                new_row["project_type"] = "Complex / Aggregated"
+                new_row["environment"] = "Mixed"
+                new_row["score_grade"] = score_agg.grade
+                new_row["score_100"] = score_agg.score_100
+                new_row["timestamp"] = datetime.now().isoformat()
+                
+                save_custom_row(new_row)
+                st.success(f"Complex project '{new_complex_name}' created successfully!")
+                st.rerun()
+
+        # --- 4. Delete Project ---
+        st.divider()
+        st.subheader("🗑️ Manage Projects")
+        p_to_delete = st.selectbox("Select project to delete", projects_list, key="del_sel")
+        if st.button("Delete Project", type="secondary"):
+            delete_project(p_to_delete)
+            st.success(f"Project '{p_to_delete}' deleted.")
+            st.rerun()

@@ -15,6 +15,12 @@ def load_projects() -> pd.DataFrame:
         return pd.read_csv(PROJECTS_CSV)
     return pd.DataFrame()
 
+def delete_project(project_name: str):
+    df = load_projects()
+    if not df.empty and "project_name" in df.columns:
+        df = df[df["project_name"] != project_name]
+        df.to_csv(PROJECTS_CSV, index=False)
+
 def save_project(inputs: ProjectInputs, fp: FootprintResult, score: ScoreResult):
     df = load_projects()
     row = inputs.model_dump()
@@ -31,4 +37,9 @@ def save_project(inputs: ProjectInputs, fp: FootprintResult, score: ScoreResult)
     flat_row.update({"total_co2_kg": fp.total_co2_kg, "total_water_m3": fp.total_water_m3, "score_grade": score.grade, "score_100": score.score_100, "timestamp": datetime.now().isoformat()})
     
     df = pd.concat([df, pd.DataFrame([flat_row])], ignore_index=True)
+    df.to_csv(PROJECTS_CSV, index=False)
+
+def save_custom_row(row_data: dict):
+    df = load_projects()
+    df = pd.concat([df, pd.DataFrame([row_data])], ignore_index=True)
     df.to_csv(PROJECTS_CSV, index=False)
