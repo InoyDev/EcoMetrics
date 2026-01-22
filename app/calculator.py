@@ -97,7 +97,8 @@ def compute_footprint(inputs: ProjectInputs, assumptions: Assumptions) -> Footpr
             t_active_annual = (i_in.req_per_day * (i_in.latency_ms / 1000.0) / 3600.0) * 365.0
             
             # Total Time (Billed/Powered)
-            if i_in.server_24_7:
+            # If Serverless, we only count active time (Scale to Zero), ignoring the 24/7 flag
+            if i_in.server_24_7 and i_in.infra_type != "cloud_serverless":
                 t_total_annual = HOURS_PER_YEAR
             else:
                 t_total_annual = t_active_annual
@@ -140,10 +141,13 @@ def compute_footprint(inputs: ProjectInputs, assumptions: Assumptions) -> Footpr
 
 def calculate_score(fp: FootprintResult) -> ScoreResult:
     co2_val = max(1.0, fp.total_co2_kg)
-    co2_score = max(0, min(100, 100 - (math.log10(co2_val) * 20)))
+    # Recalibrated formula to align Score /100 with Grades (A-G)
+    # Previous formula was too harsh for mid-sized projects (Grade C was ~40/100)
+    # New formula: 1000kg (Grade C) -> ~60/100
+    co2_score = max(0, min(100, 125 - (math.log10(co2_val) * 22)))
     
     water_val = max(0.1, fp.total_water_m3)
-    water_score = max(0, min(100, 100 - (math.log10(water_val * 10) * 20)))
+    water_score = max(0, min(100, 125 - (math.log10(max(1.0, water_val * 10)) * 22)))
     
     final_score = int(0.7 * co2_score + 0.3 * water_score)
     

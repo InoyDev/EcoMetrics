@@ -28,7 +28,8 @@ PROJECT_TYPES = {
 INFRASTRUCTURE_PROFILES = {
     "local": { "name": "Local Workstation / Laptop", "pue": 1.0 },
     "cloud": { "name": "Cloud Instance (AWS/Azure/GCP)", "pue": 1.2 },
-    "on_prem": { "name": "On-Premise Datacenter", "pue": 1.6 }
+    "on_prem": { "name": "On-Premise Datacenter", "pue": 1.6 },
+    "cloud_serverless": { "name": "Cloud Serverless (Scale-to-Zero)", "pue": 1.2 }
 }
 
 HARDWARE_CATALOG = [

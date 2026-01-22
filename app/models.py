@@ -42,7 +42,7 @@ class InferenceInputs(BaseModel):
     infra_type: str = Field(default="cloud")
     hardware_id: str = Field(default="gpu_t4")
     hardware_count: int = Field(default=1, ge=1)
-    server_24_7: bool = Field(default=False) # Is server always on?
+    server_24_7: bool = Field(default=True) # Is server always on?
     latency_ms: float = Field(default=100.0, ge=0.0)
 
     # Mode SaaS

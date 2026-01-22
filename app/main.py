@@ -23,33 +23,35 @@ st.set_page_config(page_title="EcoMetrics", layout="wide", page_icon="🌱")
 st.markdown("""
 <style>
 /* Page */
-.main {background-color: #0b1220;}
+.main {background-color: #ffffff;}
 .block-container {padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1250px;}
 
 /* Titles */
-h1, h2, h3, h4 {color: #eaf0ff;}
-p, li, div {color: #c9d4f5;}
+h1, h2, h3, h4 {color: #0b1220 !important;}
+p, li, div, label, .stMarkdown {color: #1a1a1a !important;}
 
 /* Sidebar */
-section[data-testid="stSidebar"] {background-color: #07101f;}
-section[data-testid="stSidebar"] * {color: #dbe6ff;}
+section[data-testid="stSidebar"] {background-color: #07101f; min-width: 350px !important;}
+section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {color: #eaf0ff !important;}
+section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] li, section[data-testid="stSidebar"] div, section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label {color: #dbe6ff !important;}
 
 /* Cards */
 .kpi-card {
-  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
-  border: 1px solid rgba(255,255,255,0.12);
+  background-color: #f8f9fa;
+  border: 1px solid #e9ecef;
   border-radius: 16px;
   padding: 16px 18px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
 }
-.kpi-title {font-size: 12px; opacity: .85; letter-spacing: .05em; text-transform: uppercase;}
-.kpi-value {font-size: 34px; font-weight: 800; line-height: 1.1; margin-top: 6px;}
-.kpi-sub {font-size: 12px; opacity: .85; margin-top: 8px;}
+.kpi-title {font-size: 12px; opacity: .85; letter-spacing: .05em; text-transform: uppercase; color: #666;}
+.kpi-value {font-size: 34px; font-weight: 800; line-height: 1.1; margin-top: 6px; color: #0b1220;}
+.kpi-sub {font-size: 12px; opacity: .85; margin-top: 8px; color: #666;}
 .badge {
   display: inline-block; padding: 4px 10px; border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.2);
-  background: rgba(255,255,255,0.06);
+  border: 1px solid #dee2e6;
+  background: #e9ecef;
   font-size: 12px; margin-left: 8px;
+  color: #333;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -68,6 +70,9 @@ def kpi_card(title: str, value: str, subtitle: str = "", badge: str = ""):
 
 # --- Sidebar ---
 with st.sidebar:
+    # Logo LVMH pleine largeur
+    st.image(str(Path(__file__).parent / "lvmh_logo.png"), width="stretch")
+
     st.title("🌱 EcoMetrics")
     st.caption("AI Lifecycle Assessment Tool")
     # Simplified Navigation
@@ -83,6 +88,7 @@ with st.sidebar:
 # --- Session State Init ---
 if "inputs" not in st.session_state:
     st.session_state["inputs"] = ProjectInputs().model_dump()
+    st.session_state["inputs"]["storage_network"]["include_storage_network"] = False
 
 def update_input(section, key, widget_key):
     val = st.session_state[widget_key]
@@ -220,7 +226,6 @@ if page == "Calculator":
         with i_c2:
             st.selectbox("Inference Hardware", inf_hw_ids, format_func=lambda x: next((h["name"] for h in inf_hw_opts if h["id"] == x), x), index=inf_hw_ids.index(curr_inf_hw) if curr_inf_hw in inf_hw_ids else 0, key="inf_hw", on_change=update_input, args=("inference", "hardware_id", "inf_hw"), help="The hardware used to serve requests.")
             st.number_input("Device Count", value=int(inputs_data["inference"]["hardware_count"]), min_value=1, key="inf_cnt", on_change=update_input, args=("inference", "hardware_count", "inf_cnt"), help="Number of GPUs/Servers provisioned for inference.")
-            st.checkbox("Server Always On (24/7)?", value=inputs_data["inference"]["server_24_7"], key="inf_247", on_change=update_input, args=("inference", "server_24_7", "inf_247"), help="If checked, energy is counted for 8760h/year. If unchecked, only active compute time is counted (Serverless/On-Demand).")
         with i_c3:
             st.number_input("Requests per Day", value=int(inputs_data["inference"]["req_per_day"]), min_value=1, key="inf_reqs", on_change=update_input, args=("inference", "req_per_day", "inf_reqs"), help="Daily traffic volume.")
             # Default latency based on type
@@ -312,12 +317,12 @@ if page == "Calculator":
         fig_wf.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#eaf0ff",
-            title_font_color="#eaf0ff",
+            font_color="#333333",
+            title_font_color="#0b1220",
             showlegend=False
         )
 
-        st.plotly_chart(fig_wf, use_container_width=True)
+        st.plotly_chart(fig_wf, width="stretch")
 
 
         # Executive insight
@@ -445,12 +450,12 @@ if page == "Calculator":
         fig_sim.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#eaf0ff",
-            title_font_color="#eaf0ff",
+            font_color="#333333",
+            title_font_color="#0b1220",
             showlegend=False
         )
 
-        st.plotly_chart(fig_sim, use_container_width=True)
+        st.plotly_chart(fig_sim, width="stretch")
 
 
 
@@ -494,7 +499,7 @@ elif page == "Compare Projects":
         
         # Select and rename columns that exist in the dataframe
         cols_to_show = [c for c in column_map.keys() if c in display_df.columns]
-        st.dataframe(display_df[cols_to_show].rename(columns=column_map), use_container_width=True)
+        st.dataframe(display_df[cols_to_show].rename(columns=column_map), width="stretch")
 
         # --- 2. Comparison Logic ---
         if len(df) >= 2:
