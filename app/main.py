@@ -146,24 +146,6 @@ if page == "Calculator":
     with c3:
         st.number_input("Project Duration (years)", value=float(inputs_data["project_duration_years"]), min_value=0.1, step=0.5, key="p_duration", on_change=update_input, args=(None, "project_duration_years", "p_duration"), help="How long will this project run? This is crucial to calculate the share of hardware manufacturing (amortization) attributed to this project.")
     
-    # --- PIVOT QUESTION (Training Phase Visibility) ---
-    st.markdown("---")
-    if inputs_data["project_type"] == "genai":
-        # GenAI Logic: SaaS vs Fine-Tuning
-        genai_mode = st.radio("GenAI Implementation Strategy", ["Use existing API (SaaS)", "Fine-Tuning / Self-Hosted"], index=0, horizontal=True, help="SaaS API implies no training phase impact for you.")
-        if genai_mode == "Use existing API (SaaS)":
-            st.session_state["inputs"]["training"]["include_training"] = False
-            # Optional: Auto-set inference mode to SaaS
-            # st.session_state["inputs"]["inference"]["mode"] = "SaaS / API"
-        else:
-            st.session_state["inputs"]["training"]["include_training"] = True
-    else:
-        # ML / DL Logic: Ask explicitly
-        train_q = st.radio("Do you have a Training or Fine-tuning phase?", ["Yes", "No (Inference Only)"], index=0, horizontal=True)
-        if train_q == "No (Inference Only)":
-            st.session_state["inputs"]["training"]["include_training"] = False
-        else:
-            st.session_state["inputs"]["training"]["include_training"] = True
 
     # --- STEP 2: DEVELOPMENT & TRAINING ---
     st.subheader("2. Development & Training (MLOps)")
@@ -188,6 +170,28 @@ if page == "Calculator":
     with d3:
         st.number_input("Dev Hours (Coding/Testing)", value=float(inputs_data["development"]["dev_hours"]), min_value=0.0, step=10.0, key="d_hours", on_change=update_input, args=("development", "dev_hours", "d_hours"), help="Total estimated hours spent by the team on exploration, coding, and debugging.")
     
+    # --- PIVOT QUESTION (Training Phase Visibility) ---
+    st.markdown("---")
+    
+    def update_training_visibility():
+        val = st.session_state["train_vis_radio"]
+        if val == "Yes":
+            st.session_state["inputs"]["training"]["include_training"] = True
+            # GenAI Constraint: Training implies Self-Hosted Inference
+            if st.session_state["inputs"]["project_type"] == "genai":
+                st.session_state["inputs"]["inference"]["mode"] = "Self-Hosted"
+        else:
+            st.session_state["inputs"]["training"]["include_training"] = False
+
+    st.radio(
+        "Do you have a Training or Fine-tuning phase?", 
+        ["Yes", "No (Inference Only)"], 
+        index=0 if inputs_data["training"]["include_training"] else 1, 
+        horizontal=True,
+        key="train_vis_radio",
+        on_change=update_training_visibility
+    )
+
     # Training (Conditional)
     if inputs_data["training"]["include_training"]:
         st.markdown("**🏋️ Training Phase (Runs)**")
@@ -223,7 +227,20 @@ if page == "Calculator":
     is_genai = inputs_data["project_type"] == "genai"
     
     if is_genai:
-        st.radio("Inference Mode", ["SaaS / API", "Self-Hosted"], index=0 if inputs_data["inference"]["mode"] == "SaaS / API" else 1, key="inf_mode", on_change=update_input, args=("inference", "mode", "inf_mode"), help="**SaaS/API**: Emissions calculated based on token volume (Black-box).\n**Self-Hosted**: Emissions calculated based on hardware power and active time (White-box).")
+        # Lock to Self-Hosted if Training is active
+        is_locked = inputs_data["training"]["include_training"]
+        st.radio(
+            "Inference Mode", 
+            ["SaaS / API", "Self-Hosted"], 
+            index=0 if inputs_data["inference"]["mode"] == "SaaS / API" else 1, 
+            key="inf_mode", 
+            on_change=update_input, 
+            args=("inference", "mode", "inf_mode"), 
+            disabled=is_locked,
+            help="**SaaS/API**: Emissions calculated based on token volume (Black-box).\n**Self-Hosted**: Emissions calculated based on hardware power and active time (White-box)."
+        )
+        if is_locked:
+            st.caption("🔒 Inference is set to **Self-Hosted** because a training phase is included.")
 
     if is_genai and inputs_data["inference"]["mode"] == "SaaS / API":
         # SaaS Flow
