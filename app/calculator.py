@@ -85,9 +85,16 @@ def compute_footprint(inputs: ProjectInputs, assumptions: Assumptions) -> Footpr
         
         if is_genai_api:
             annual_reqs = i_in.req_per_day * 365
-            model_factor = API_MODELS.get(i_in.api_model, 0.02)
-            annual_gco2 = annual_reqs * i_in.tokens_per_req * (model_factor / 1000.0) # per 1k tokens
+
+            # --- CO2 proxy
+            model_factor = API_MODELS.get(i_in.api_model, 0.02)  # gCO2 / 1k tokens
+            annual_gco2 = annual_reqs * i_in.tokens_per_req * (model_factor / 1000.0)
             inf_co2_usage_total = (annual_gco2 / 1000.0) * project_years
+
+            # --- Energy proxy
+            inf_energy_annual = annual_reqs * assumptions.api_energy_kwh_per_query
+
+
         else:
             # Compute Mode (ML Classic, DL, Self-Hosted GenAI)
             hw_inf = get_hardware_specs(i_in.hardware_id)
@@ -126,7 +133,7 @@ def compute_footprint(inputs: ProjectInputs, assumptions: Assumptions) -> Footpr
 
     # --- Totals ---
     total_co2 = total_co2_dev + train_co2_usage + train_co2_embodied + inf_co2_usage_total + inf_co2_embodied_total + sn_co2_total
-    total_energy = train_energy + (inf_energy_annual * project_years) + (sn_energy_annual * project_years)
+    total_energy = dev_energy + train_energy + (inf_energy_annual * project_years) + (sn_energy_annual * project_years)
     total_water = total_energy * water_factor
     annual_co2 = total_co2 / max(0.1, project_years)
 

@@ -12,6 +12,7 @@ DEFAULT_GCO2_PER_GB_TRANSFER = 5.0
 DEFAULT_KWH_PER_GB_YEAR_STORAGE = 1.2e-3
 
 class Assumptions(BaseModel):
+    api_energy_kwh_per_query: float = Field(default=0.0003, ge=0.0)  # 0.3 Wh / query
     water_m3_per_mwh: float = Field(default=DEFAULT_WATER_M3_PER_MWH, ge=0.0)
     default_gco2_per_100_tokens: float = Field(default=DEFAULT_GCO2_PER_100_TOKENS, ge=0.0)
     default_gco2_per_gb_transfer: float = Field(default=DEFAULT_GCO2_PER_GB_TRANSFER, ge=0.0)
@@ -47,8 +48,8 @@ class InferenceInputs(BaseModel):
 
     # Mode SaaS
     api_model: str = Field(default="GPT-3.5 Turbo / Haiku / Flash")
-    req_per_day: int = Field(default=1000, ge=0)
-    tokens_per_req: int = Field(default=1000, ge=0)
+    req_per_day: int = Field(default=1500, ge=0)
+    tokens_per_req: int = Field(default=1500, ge=0)
 
 class StorageNetworkInputs(BaseModel):
     include_storage_network: bool = True

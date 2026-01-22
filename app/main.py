@@ -84,6 +84,14 @@ with st.sidebar:
         assumptions = Assumptions()
         assumptions.water_m3_per_mwh = st.number_input("Water Intensity (m³/MWh)", value=assumptions.water_m3_per_mwh, step=0.1, help="Average water consumption factor for electricity generation and datacenter cooling (Scope 2 Water).")
         assumptions.hardware_lifespan_years = st.number_input("Hardware Lifespan (years)", value=assumptions.hardware_lifespan_years, step=1.0, help="Expected total lifespan of the server hardware. Used to amortize the manufacturing carbon footprint (Scope 3).")
+        assumptions.api_energy_kwh_per_query = st.number_input(
+            "API Energy (kWh / query)",
+            value=float(assumptions.api_energy_kwh_per_query),
+            step=0.0001,
+            format="%.4f",
+            help="Proxy energy for GenAI SaaS/API. Default 0.0003 kWh/query (0.3 Wh)."
+        )
+
 
 # --- Session State Init ---
 if "inputs" not in st.session_state:
@@ -107,10 +115,19 @@ inputs_data = st.session_state["inputs"]
 
 # --- PAGE: Calculator ---
 if page == "Calculator":
-    st.header("Project Carbon Calculator")
-    
-    # --- STEP 1: GLOBAL PROFILE ---
+    st.markdown(
+        "<h1 style='text-align:center;'>Project Carbon Calculator</h1>",
+        unsafe_allow_html=True
+    )
+
+
+ # --- STEP 1: GLOBAL PROFILE ---
     st.subheader("1. Global Profile")
+    st.caption(
+        "This section defines the overall context of the project (type, environment and expected duration). "
+        "These selections allow the tool to automatically adjust calculation logic and assumptions, "
+        "ensuring consistent and comparable environmental assessments across projects."
+    )
     c1, c2, c3 = st.columns(3)
     with c1:
         st.text_input("Project Name", value=inputs_data["project_name"], key="p_name", on_change=update_input, args=(None, "project_name", "p_name"), help="A unique name to identify this simulation.")
@@ -154,7 +171,13 @@ if page == "Calculator":
 
     # --- STEP 2: DEVELOPMENT & TRAINING ---
     st.subheader("2. Development & Training (MLOps)")
-    
+    st.caption(
+        "This section captures the resources used during the development and training phases. "
+        "It covers exploratory work, model training and retraining activities. "
+        "The information provided here is used to estimate both operational emissions and the "
+        "allocated share of hardware manufacturing impact over the project lifecycle."
+    )
+
     # Development Phase
     st.markdown("**🛠️ Development Phase (Exploration)**")
     d1, d2, d3 = st.columns(3)
@@ -195,7 +218,14 @@ if page == "Calculator":
 
     # --- STEP 3: INFERENCE ---
     st.subheader("3. Inference / Production")
-    
+
+    st.caption(
+        "This section describes how the model is used in production. "
+        "Depending on the deployment strategy (API-based or self-hosted), the tool applies different "
+        "calculation approaches to estimate usage-related energy consumption and emissions. "
+        "This phase often represents the main long-term environmental impact of the project."
+    )
+
     # Logic: GenAI can be SaaS or Self-Hosted. ML/DL is always Compute (Self-Hosted logic).
     is_genai = inputs_data["project_type"] == "genai"
     
@@ -280,7 +310,7 @@ if page == "Calculator":
             st.markdown("<br>", unsafe_allow_html=True)
             st.divider()
             st.markdown("<br>", unsafe_allow_html=True)
-            kpi_card("Annual CO₂", f"<div style='text-align:center'>{res.annual_co2_kg:.0f} kg/y</div>")
+            kpi_card(f"<div style='text-align:center'>Annual CO₂", f"<div style='text-align:center'>{res.annual_co2_kg:.0f} kg/y</div>")
 
         st.divider()
         st.subheader("Impact Dashboard")
@@ -357,7 +387,7 @@ if page == "Calculator":
         with c1:
             token_reduction = st.slider(
                 "Reduce tokens per request (%)",
-                0, 100, 20, 5,
+                0, 100, 5, 5,
                 help="Typical realistic range: 10–40%. "
                     "Achieved via prompt compression, RAG, output limits."
             )
@@ -372,7 +402,7 @@ if page == "Calculator":
 
             traffic_reduction = st.slider(
                 "Reduce daily traffic (%)",
-                0, 100, 10, 5,
+                0, 100, 5, 5,
                 help="Typical realistic range: 5–30%. "
                     "Achieved via caching, UX optimization, rate limiting."
             )
@@ -385,7 +415,7 @@ if page == "Calculator":
         with c2:
             region_gain = st.slider(
                 "Cleaner energy region benefit (%)",
-                0, 100, 30, 5,
+                0, 100, 5, 5,
                 help="Typical realistic range: 20–60%. "
                     "Represents moving workloads to lower-carbon electricity regions."
             )
@@ -394,7 +424,7 @@ if page == "Calculator":
 
             pue_improvement = st.slider(
                 "Datacenter efficiency improvement (PUE) (%)",
-                0, 100, 15, 5,
+                0, 100, 5, 5,
                 help="Typical realistic range: 5–25%. "
                     "Achieved via better cloud providers or more efficient facilities."
             )
@@ -444,6 +474,16 @@ if page == "Calculator":
                 "Current": "#7f8c8d",            # gris (baseline)
                 "After optimization": "#2ecc71"  # vert (gain)
             }
+        )
+
+        fig_sim.update_traces(
+            textfont=dict(
+                size=20,              # plus lisible mais pas agressif
+                color="white",        # contraste propre dans les barres
+                family="sans-serif",  # police neutre (proche Power BI)
+            ),
+            textposition="inside",
+            insidetextanchor="middle"
         )
 
 
