@@ -12,11 +12,59 @@ import plotly.express as px
 from pydantic import ValidationError
 
 from app.models import ProjectInputs, Assumptions, FootprintResult
-from app.calculator import compute_footprint, calculate_score
+from app.calculator import compute_footprint, calculate_score, simulate_what_if
 from app.utils import load_projects, save_project, delete_project, save_custom_row
+
 from app.constants import HARDWARE_CATALOG, PROJECT_TYPES, INFRASTRUCTURE_PROFILES, DEFAULT_GRID_INTENSITY, API_MODELS
 
 st.set_page_config(page_title="EcoMetrics", layout="wide", page_icon="🌱")
+
+# Mise en page et style
+st.markdown("""
+<style>
+/* Page */
+.main {background-color: #0b1220;}
+.block-container {padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1250px;}
+
+/* Titles */
+h1, h2, h3, h4 {color: #eaf0ff;}
+p, li, div {color: #c9d4f5;}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {background-color: #07101f;}
+section[data-testid="stSidebar"] * {color: #dbe6ff;}
+
+/* Cards */
+.kpi-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+  padding: 16px 18px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+}
+.kpi-title {font-size: 12px; opacity: .85; letter-spacing: .05em; text-transform: uppercase;}
+.kpi-value {font-size: 34px; font-weight: 800; line-height: 1.1; margin-top: 6px;}
+.kpi-sub {font-size: 12px; opacity: .85; margin-top: 8px;}
+.badge {
+  display: inline-block; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.06);
+  font-size: 12px; margin-left: 8px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# def pour les kpis
+def kpi_card(title: str, value: str, subtitle: str = "", badge: str = ""):
+    st.markdown(f"""
+    <div class="kpi-card">
+      <div class="kpi-title">{title} {"<span class='badge'>"+badge+"</span>" if badge else ""}</div>
+      <div class="kpi-value">{value}</div>
+      <div class="kpi-sub">{subtitle}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 
 # --- Sidebar ---
 with st.sidebar:
@@ -187,38 +235,227 @@ if page == "Calculator":
 
     # --- Results ---
     st.divider()
-    st.header("Results & Analysis")
+    st.markdown("<h1 style='text-align:center;'>Results & Analysis</h1>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     try:
         inputs_obj = ProjectInputs(**inputs_data)
         res = compute_footprint(inputs_obj, assumptions)
         score = calculate_score(res)
         
-        col_score, col_kpi = st.columns([1, 2])
+        col_score, col_kpi = st.columns([1, 3])
         with col_score:
-            st.markdown(f"""
-            <div style="background-color: {score.color}20; border: 2px solid {score.color}; border-radius: 10px; padding: 20px; text-align: center;">
-                <h3 style="color: {score.color}; margin:0;">Grade {score.grade}</h3>
-                <h1 style="font-size: 4em; margin:0;">{score.score_100}</h1>
-                <p style="margin:0;"><b>{score.label}</b></p>
-            </div>
-            """, unsafe_allow_html=True)
+                    st.markdown(
+                f"""
+                <div style="
+                    height: 100%;
+                    min-height: 300px;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    background-color: {score.color}20;
+                    border: 2px solid {score.color};
+                    border-radius: 12px;
+                    padding: 30px;
+                    text-align: center;
+                ">
+                    <h3 style="color: {score.color}; margin:0;">Grade</h3>
+                    <h1 style="font-size: 3.5em; margin:0;">{score.grade}</h1>
+                    <h2 style="margin:0;">{score.score_100}/100</h2>
+                    <p style="margin-top:8px;"><b>{score.label}</b></p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         with col_kpi:
             k1, k2, k3 = st.columns(3)
-            k1.metric("Total CO₂ (Lifecycle)", f"{res.total_co2_kg:.0f} kg")
-            k2.metric("Total Energy", f"{res.total_energy_kwh:.0f} kWh")
-            k3.metric("Total Water", f"{res.total_water_m3:.1f} m³")
+            with k1: kpi_card("Total CO₂ (lifecycle)", f"{res.total_co2_kg:,.0f} kg", "All phases combined")
+            with k2: kpi_card("Total Energy", f"{res.total_energy_kwh:,.0f} kWh", "Usage energy")
+            with k3: kpi_card("Total Water", f"{res.total_water_m3:,.1f} m³", "Cooling + electricity proxy")
+            st.markdown("<br>", unsafe_allow_html=True)
             st.divider()
-            st.metric("Annual CO₂", f"{res.annual_co2_kg:.0f} kg/y")
+            st.markdown("<br>", unsafe_allow_html=True)
+            kpi_card("Annual CO₂", f"<div style='text-align:center'>{res.annual_co2_kg:.0f} kg/y</div>")
 
-        st.subheader("Detailed Breakdown")
-        breakdown_data = {
-            "Phase": ["Development", "Training", "Training", "Inference", "Inference", "Storage/Network"],
-            "Type": ["Total", "Usage", "Embodied", "Usage", "Embodied", "Usage"],
-            "CO2 (kg)": [res.co2_dev, res.co2_training_usage, res.co2_training_embodied, res.co2_inference_usage, res.co2_inference_embodied, res.co2_storage_network]
+        st.divider()
+        st.subheader("Impact Dashboard")
+
+        wf_df = pd.DataFrame({
+            "Phase": [
+                "Development",
+                "Training (Usage)",
+                "Training (Embodied)",
+                "Inference (Usage)",
+                "Inference (Embodied)",
+                "Storage & Network"
+            ],
+            "CO₂ (kg)": [
+                res.co2_dev,
+                res.co2_training_usage,
+                res.co2_training_embodied,
+                res.co2_inference_usage,
+                res.co2_inference_embodied,
+                res.co2_storage_network
+            ]
+        })
+
+        wf_df = wf_df[wf_df["CO₂ (kg)"] > 0]
+
+        fig_wf = px.bar(
+            wf_df,
+            x="Phase",
+            y="CO₂ (kg)",
+            color="Phase",
+            title="CO₂ Contribution by Phase"
+        )
+
+        fig_wf.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#eaf0ff",
+            title_font_color="#eaf0ff",
+            showlegend=False
+        )
+
+        st.plotly_chart(fig_wf, use_container_width=True)
+
+
+        # Executive insight
+        impact_by_phase = {
+            "Development": res.co2_dev,
+            "Training": res.co2_training_usage + res.co2_training_embodied,
+            "Inference": res.co2_inference_usage + res.co2_inference_embodied,
+            "Storage & Network": res.co2_storage_network
         }
-        df_chart = pd.DataFrame(breakdown_data)
-        fig = px.bar(df_chart, x="Phase", y="CO2 (kg)", color="Type", title="CO₂ Impact by Phase & Scope")
-        st.plotly_chart(fig, use_container_width=True)
+
+        main_driver = max(impact_by_phase, key=impact_by_phase.get)
+        main_value = impact_by_phase[main_driver]
+        pct = (main_value / res.total_co2_kg) * 100 if res.total_co2_kg > 0 else 0
+
+        st.info(
+            f"🔍 **Key insight** — The main contributor to the environmental footprint is "
+            f"**{main_driver}**, representing **{pct:.0f}%** of total CO₂ emissions. "
+            f"This phase should be prioritized for optimization."
+        )
+
+        st.subheader("🎛️ CO₂ Optimization Levers (What-If Simulator)")
+        st.caption(
+            "Explore how realistic operational decisions can reduce the carbon footprint. "
+            "Sliders allow up to 100% for exploration, but recommended realistic ranges are indicated."
+        )
+
+        c1, c2, c3 = st.columns(3)
+
+        # --------------------
+        # COLUMN 1 — USAGE
+        # --------------------
+        with c1:
+            token_reduction = st.slider(
+                "Reduce tokens per request (%)",
+                0, 100, 20, 5,
+                help="Typical realistic range: 10–40%. "
+                    "Achieved via prompt compression, RAG, output limits."
+            )
+            if token_reduction > 40 and token_reduction != 100:
+                st.warning("⚠️ Above 40% usually requires product redesign or strong constraints.")
+            if token_reduction == 100:
+                st.error(
+                    "❌ **100% token reduction is impossible** — "
+                    "it would mean no prompt and no model output. "
+                    "This scenario cannot exist in a real project."
+                )
+
+            traffic_reduction = st.slider(
+                "Reduce daily traffic (%)",
+                0, 100, 10, 5,
+                help="Typical realistic range: 5–30%. "
+                    "Achieved via caching, UX optimization, rate limiting."
+            )
+            if traffic_reduction > 30:
+                st.warning("⚠️ Large traffic reduction may impact business usage or adoption.")
+
+        # --------------------
+        # COLUMN 2 — INFRA
+        # --------------------
+        with c2:
+            region_gain = st.slider(
+                "Cleaner energy region benefit (%)",
+                0, 100, 30, 5,
+                help="Typical realistic range: 20–60%. "
+                    "Represents moving workloads to lower-carbon electricity regions."
+            )
+            if region_gain > 60:
+                st.warning("⚠️ Above 60% assumes best-in-class low-carbon regions only.")
+
+            pue_improvement = st.slider(
+                "Datacenter efficiency improvement (PUE) (%)",
+                0, 100, 15, 5,
+                help="Typical realistic range: 5–25%. "
+                    "Achieved via better cloud providers or more efficient facilities."
+            )
+            if pue_improvement > 25:
+                st.warning("⚠️ High PUE gains are rarely achievable without infrastructure change.")
+
+        # --------------------
+        # COLUMN 3 — TRAINING
+        # --------------------
+        with c3:
+            training_freq_reduction = st.slider(
+                "Reduce training frequency (%)",
+                0, 100, 0, 10,
+                help="Typical realistic range: 0–50%. "
+                    "Achieved by retraining only when data or performance drifts."
+            )
+            if training_freq_reduction > 50:
+                st.warning("⚠️ Strong reduction may affect model accuracy or freshness.")
+
+        
+        # --- WHAT-IF SIMULATION (Calculator layer) ---
+        what_if = simulate_what_if(
+            res,
+            token_reduction_pct=token_reduction,
+            traffic_reduction_pct=traffic_reduction,
+            region_gain_pct=region_gain,
+            pue_improvement_pct=pue_improvement,
+            training_freq_reduction_pct=training_freq_reduction,
+        )
+
+        sim_df = pd.DataFrame({
+            "Scenario": ["Current", "After optimization"],
+            "Annual CO₂ (kg)": [
+                res.annual_co2_kg,
+                what_if["optimized_co2_kg"] / inputs_obj.project_duration_years
+            ]
+        })
+
+        fig_sim = px.bar(
+            sim_df,
+            x="Scenario",
+            y="Annual CO₂ (kg)",
+            color="Scenario",
+            text_auto=".2s",
+            title="Annual CO₂ Impact — What-If Scenario",
+            color_discrete_map={
+                "Current": "#7f8c8d",            # gris (baseline)
+                "After optimization": "#2ecc71"  # vert (gain)
+            }
+        )
+
+
+        fig_sim.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="#eaf0ff",
+            title_font_color="#eaf0ff",
+            showlegend=False
+        )
+
+        st.plotly_chart(fig_sim, use_container_width=True)
+
+
+
+
+        
 
         if st.button("💾 Save Project Result"):
             save_project(inputs_obj, res, score)

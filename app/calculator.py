@@ -157,3 +157,52 @@ def calculate_score(fp: FootprintResult) -> ScoreResult:
     else: grade, color, label = "G", "#8e44ad", "Critical"
     
     return ScoreResult(final_score, grade, color, label)
+
+
+def simulate_what_if(
+    fp: FootprintResult,
+    *,
+    token_reduction_pct: float = 0.0,
+    traffic_reduction_pct: float = 0.0,
+    region_gain_pct: float = 0.0,
+    pue_improvement_pct: float = 0.0,
+    training_freq_reduction_pct: float = 0.0,
+) -> dict:
+    """
+    Simulate CO₂ reduction using realistic operational levers.
+    Percentages are expected between 0 and 100.
+    """
+
+    baseline = fp.total_co2_kg
+    co2_after = baseline
+
+    # --- Inference usage levers ---
+    inference_usage = fp.co2_inference_usage
+
+    co2_after -= inference_usage * (token_reduction_pct / 100)
+    co2_after -= inference_usage * (traffic_reduction_pct / 100)
+
+    # --- Infrastructure levers (usage-based only) ---
+    infra_usage = (
+        fp.co2_training_usage +
+        fp.co2_inference_usage +
+        fp.co2_storage_network
+    )
+
+    co2_after -= infra_usage * (region_gain_pct / 100)
+    co2_after -= infra_usage * (pue_improvement_pct / 100)
+
+    # --- Training frequency lever ---
+    co2_after -= fp.co2_training_usage * (training_freq_reduction_pct / 100)
+
+    co2_after = max(0.0, co2_after)
+
+    return {
+        "baseline_co2_kg": baseline,
+        "optimized_co2_kg": co2_after,
+        "absolute_reduction_kg": baseline - co2_after,
+        "relative_reduction_pct": (
+            (baseline - co2_after) / baseline * 100
+            if baseline > 0 else 0
+        ),
+    }
