@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 from datetime import datetime
+import tempfile
+import os
 
 # Add project root to sys.path to allow 'app' module imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -10,6 +12,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from pydantic import ValidationError
+from fpdf import FPDF
 
 from app.models import ProjectInputs, Assumptions, FootprintResult
 from app.calculator import compute_footprint, calculate_score, simulate_what_if
@@ -66,12 +69,178 @@ def kpi_card(title: str, value: str, subtitle: str = "", badge: str = ""):
     </div>
     """, unsafe_allow_html=True)
 
+# --- PDF GENERATION FUNCTION ---
+def get_hardware_name(hw_id):
+    """Helper to get readable hardware name from ID"""
+    for h in HARDWARE_CATALOG:
+        if h["id"] == hw_id:
+            return h["name"]
+    return hw_id
+
+def get_infra_name(infra_id):
+    """Helper to get readable infra name from ID"""
+    if infra_id in INFRASTRUCTURE_PROFILES:
+        return INFRASTRUCTURE_PROFILES[infra_id]["name"]
+    return infra_id
+
+def create_robust_pdf(inputs, res, score, fig_wf=None, fig_sim=None):
+    """
+    Génère un PDF professionnel.
+    Inclut un nettoyage des caractères (sanitize) pour éviter l'erreur 'latin-1'.
+    """
+    
+    # --- FONCTION DE NETTOYAGE ---
+    def sanitize(text):
+        """Supprime les emojis et caractères non supportés par FPDF"""
+        if not isinstance(text, str):
+            text = str(text)
+        # Encode en latin-1 en ignorant les erreurs (emojis), puis décode
+        return text.encode('latin-1', 'ignore').decode('latin-1')
+
+    class PDF(FPDF):
+        def header(self):
+            self.set_font('Arial', 'B', 16)
+            self.cell(0, 10, 'EcoMetrics Report', 0, 1, 'L')
+            self.set_font('Arial', '', 10)
+            self.cell(0, 5, f'Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M")}', 0, 1, 'L')
+            self.line(10, 25, 200, 25)
+            self.ln(10)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Arial', 'I', 8)
+            self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+        def section_title(self, label):
+            self.set_font('Arial', 'B', 12)
+            self.set_fill_color(240, 240, 240)
+            # On nettoie aussi le titre au cas où
+            self.cell(0, 8, f"  {sanitize(label)}", 0, 1, 'L', 1)
+            self.ln(2)
+
+        def key_value(self, key, value):
+            self.set_font('Arial', 'B', 10)
+            self.cell(50, 6, f"{sanitize(key)}:", 0, 0)
+            self.set_font('Arial', '', 10)
+            self.cell(0, 6, f"{sanitize(str(value))}", 0, 1)
+
+    # Instanciation
+    pdf = PDF()
+    pdf.add_page()
+    
+    # 1. Project Summary
+    pdf.section_title("Project Overview")
+    pdf.key_value("Project Name", inputs.project_name)
+    
+    # Get readable project type label and SANITIZE IT (removes 🤖)
+    p_type_label = PROJECT_TYPES.get(inputs.project_type, inputs.project_type)
+    pdf.key_value("Type", p_type_label)
+    
+    pdf.key_value("Environment", inputs.environment)
+    pdf.key_value("Duration", f"{inputs.project_duration_years} years")
+    pdf.ln(5)
+
+    # 2. Score
+    pdf.set_fill_color(230, 240, 255)
+    pdf.rect(10, pdf.get_y(), 190, 25, 'F')
+    pdf.set_xy(10, pdf.get_y() + 5)
+    pdf.set_font('Arial', 'B', 16)
+    pdf.cell(0, 8, f"Eco-Grade: {sanitize(score.grade)}", 0, 1, 'C')
+    pdf.set_font('Arial', '', 12)
+    pdf.cell(0, 8, f"Score: {score.score_100}/100", 0, 1, 'C')
+    pdf.ln(10)
+
+    # 3. KPIs
+    pdf.section_title("Key Performance Indicators")
+    pdf.key_value("Total CO2 eq", f"{res.total_co2_kg:,.0f} kg")
+    pdf.key_value("Total Energy", f"{res.total_energy_kwh:,.0f} kWh")
+    pdf.key_value("Total Water", f"{res.total_water_m3:,.1f} m3")
+    pdf.ln(5)
+
+    # 4. Details
+    pdf.section_title("Configuration Details")
+    
+    # Dev
+    pdf.set_font('Arial', 'B', 10)
+    pdf.cell(0, 6, "> Development Phase", 0, 1)
+    pdf.set_font('Arial', '', 9)
+    # Sanitize inputs
+    pdf.cell(0, 5, sanitize(f"   - Infra: {get_infra_name(inputs.development.infra_type)}"), 0, 1)
+    pdf.cell(0, 5, sanitize(f"   - Hardware: {get_hardware_name(inputs.development.hardware_id)}"), 0, 1)
+    pdf.cell(0, 5, f"   - Hours: {inputs.development.dev_hours}h", 0, 1)
+
+    # Training
+    if inputs.training.include_training:
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "> Training Phase", 0, 1)
+        pdf.set_font('Arial', '', 9)
+        pdf.cell(0, 5, sanitize(f"   - Region: {inputs.training.region} ({get_infra_name(inputs.training.infra_type)})"), 0, 1)
+        pdf.cell(0, 5, sanitize(f"   - Hardware: {inputs.training.hardware_count}x {get_hardware_name(inputs.training.hardware_id)}"), 0, 1)
+        pdf.cell(0, 5, sanitize(f"   - Run: {inputs.training.duration_run_hours}h | Freq: {inputs.training.frequency}"), 0, 1)
+
+    # Inference
+    if inputs.inference.include_inference:
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "> Inference Phase", 0, 1)
+        pdf.set_font('Arial', '', 9)
+        if inputs.inference.mode == "SaaS / API":
+            pdf.cell(0, 5, sanitize(f"   - Mode: API ({inputs.inference.api_model})"), 0, 1)
+            pdf.cell(0, 5, f"   - Vol: {inputs.inference.req_per_day} req/day | {inputs.inference.tokens_per_req} tokens/req", 0, 1)
+        else:
+            pdf.cell(0, 5, sanitize(f"   - Mode: Self-Hosted in {inputs.inference.region}"), 0, 1)
+            pdf.cell(0, 5, sanitize(f"   - Hardware: {inputs.inference.hardware_count}x {get_hardware_name(inputs.inference.hardware_id)}"), 0, 1)
+            pdf.cell(0, 5, sanitize(f"   - Infra: {get_infra_name(inputs.inference.infra_type)}"), 0, 1)
+
+    # Storage
+    if inputs.storage_network.include_storage_network:
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 6, "> Storage & Network", 0, 1)
+        pdf.set_font('Arial', '', 9)
+        pdf.cell(0, 5, f"   - Dataset: {inputs.storage_network.dataset_gb} GB", 0, 1)
+        pdf.cell(0, 5, f"   - Transfer: {inputs.storage_network.transfer_gb_per_day} GB/day", 0, 1)
+
+
+    pdf.ln(5)
+
+    # 5. Charts
+    # Waterfall
+    if fig_wf:
+        pdf.add_page()
+        pdf.section_title("Emissions Breakdown")
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
+                # Nécessite 'kaleido' : pip install kaleido
+                fig_wf.write_image(tmpfile.name, scale=2, width=800, height=500)
+                pdf.image(tmpfile.name, x=10, w=190)
+                tmp_wf_path = tmpfile.name
+            os.remove(tmp_wf_path)
+        except Exception as e:
+            pdf.set_font('Arial', 'I', 10)
+            pdf.cell(0, 10, sanitize(f"Error generating chart (install kaleido): {str(e)}"), 0, 1)
+
+    # What-If
+    if fig_sim:
+        pdf.ln(10)
+        pdf.section_title("Optimization Scenario")
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
+                fig_sim.write_image(tmpfile.name, scale=2, width=800, height=500)
+                pdf.image(tmpfile.name, x=10, w=190)
+                tmp_sim_path = tmpfile.name
+            os.remove(tmp_sim_path)
+        except Exception as e:
+            pass
+
+    return pdf.output(dest='S').encode('latin-1', errors='replace')
 
 
 # --- Sidebar ---
 with st.sidebar:
     # Logo LVMH pleine largeur
-    st.image(str(Path(__file__).parent / "lvmh_logo.png"), width="stretch")
+    # Use Path to find logo in current directory
+    logo_path = Path(__file__).parent / "lvmh_logo.png"
+    if logo_path.exists():
+        st.image(str(logo_path), width="stretch")
 
     st.title("🌱 EcoMetrics")
     st.caption("AI Lifecycle Assessment Tool")
@@ -166,7 +335,10 @@ if page == "Calculator":
         dev_hw_opts = [h for h in HARDWARE_CATALOG if h["type"] == "cpu" or "laptop" in h["id"]]
         dev_hw_ids = [h["id"] for h in dev_hw_opts]
         curr_dev_hw = inputs_data["development"]["hardware_id"]
-        st.selectbox("Dev Hardware", dev_hw_ids, format_func=lambda x: next((h["name"] for h in dev_hw_opts if h["id"] == x), x), index=dev_hw_ids.index(curr_dev_hw) if curr_dev_hw in dev_hw_ids else 0, key="d_hw", on_change=update_input, args=("development", "hardware_id", "d_hw"), help="The primary hardware used by data scientists. Laptops have high embodied carbon relative to their energy usage.")
+        # Safe index
+        try: idx_hw = dev_hw_ids.index(curr_dev_hw)
+        except ValueError: idx_hw = 0
+        st.selectbox("Dev Hardware", dev_hw_ids, format_func=lambda x: next((h["name"] for h in dev_hw_opts if h["id"] == x), x), index=idx_hw, key="d_hw", on_change=update_input, args=("development", "hardware_id", "d_hw"), help="The primary hardware used by data scientists. Laptops have high embodied carbon relative to their energy usage.")
     with d3:
         st.number_input("Dev Hours (Coding/Testing)", value=float(inputs_data["development"]["dev_hours"]), min_value=0.0, step=10.0, key="d_hours", on_change=update_input, args=("development", "dev_hours", "d_hours"), help="Total estimated hours spent by the team on exploration, coding, and debugging.")
     
@@ -201,12 +373,14 @@ if page == "Calculator":
         train_hw_opts = get_filtered_hardware(inputs_data["project_type"])
         train_hw_ids = [h["id"] for h in train_hw_opts]
         curr_train_hw = inputs_data["training"]["hardware_id"]
+        try: idx_thw = train_hw_ids.index(curr_train_hw)
+        except ValueError: idx_thw = 0
         
         with t_c1:
             st.selectbox("Training Region", list(DEFAULT_GRID_INTENSITY.keys()), index=list(DEFAULT_GRID_INTENSITY.keys()).index(inputs_data["training"]["region"]), key="t_reg", on_change=update_input, args=("training", "region", "t_reg"), help="The geographical location of the datacenter. This determines the carbon intensity of the electricity (gCO2e/kWh).")
             st.selectbox("Training Infra", list(INFRASTRUCTURE_PROFILES.keys()), format_func=lambda x: INFRASTRUCTURE_PROFILES[x]["name"], index=list(INFRASTRUCTURE_PROFILES.keys()).index(inputs_data["training"]["infra_type"]), key="t_infra", on_change=update_input, args=("training", "infra_type", "t_infra"), help="The facility type. Cloud datacenters are typically more energy-efficient (lower PUE) than average on-premise server rooms.")
         with t_c2:
-            st.selectbox("Training Hardware", train_hw_ids, format_func=lambda x: next((h["name"] for h in train_hw_opts if h["id"] == x), x), index=train_hw_ids.index(curr_train_hw) if curr_train_hw in train_hw_ids else 0, key="t_hw", on_change=update_input, args=("training", "hardware_id", "t_hw"), help="The GPU/TPU model used. High-end GPUs (e.g., A100) consume more power and have a higher manufacturing footprint.")
+            st.selectbox("Training Hardware", train_hw_ids, format_func=lambda x: next((h["name"] for h in train_hw_opts if h["id"] == x), x), index=idx_thw, key="t_hw", on_change=update_input, args=("training", "hardware_id", "t_hw"), help="The GPU/TPU model used. High-end GPUs (e.g., A100) consume more power and have a higher manufacturing footprint.")
             st.number_input("Device Count", value=int(inputs_data["training"]["hardware_count"]), min_value=1, key="t_count", on_change=update_input, args=("training", "hardware_count", "t_count"), help="Number of GPUs running in parallel during a training session.")
         with t_c3:
             st.number_input("Duration per Run (hours)", value=float(inputs_data["training"]["duration_run_hours"]), min_value=0.0, key="t_dur", on_change=update_input, args=("training", "duration_run_hours", "t_dur"), help="Time taken to complete one full training run (in hours).")
@@ -247,7 +421,10 @@ if page == "Calculator":
         i_c1, i_c2 = st.columns(2)
         with i_c1:
             curr_model = inputs_data["inference"]["api_model"]
-            st.selectbox("GenAI Model", list(API_MODELS.keys()), index=list(API_MODELS.keys()).index(curr_model) if curr_model in API_MODELS else 0, key="inf_model", on_change=update_input, args=("inference", "api_model", "inf_model"), help="The specific model used. Larger models (e.g., GPT-4) require more energy per token than smaller ones (e.g., Haiku).")
+            # Safe index
+            try: idx_mod = list(API_MODELS.keys()).index(curr_model)
+            except ValueError: idx_mod = 0
+            st.selectbox("GenAI Model", list(API_MODELS.keys()), index=idx_mod, key="inf_model", on_change=update_input, args=("inference", "api_model", "inf_model"), help="The specific model used. Larger models (e.g., GPT-4) require more energy per token than smaller ones (e.g., Haiku).")
             st.number_input("Requests per Day", value=int(inputs_data["inference"]["req_per_day"]), min_value=1, key="inf_reqs", on_change=update_input, args=("inference", "req_per_day", "inf_reqs"), help="Average number of API calls per day.")
         with i_c2:
             st.number_input("Avg Tokens per Request", value=int(inputs_data["inference"]["tokens_per_req"]), key="inf_tokens", on_change=update_input, args=("inference", "tokens_per_req", "inf_tokens"), help="Sum of Input (Prompt) and Output (Completion) tokens. 1k tokens ≈ 750 words.")
@@ -259,12 +436,14 @@ if page == "Calculator":
         inf_hw_opts = get_filtered_hardware(inputs_data["project_type"])
         inf_hw_ids = [h["id"] for h in inf_hw_opts]
         curr_inf_hw = inputs_data["inference"]["hardware_id"]
+        try: idx_ihw = inf_hw_ids.index(curr_inf_hw)
+        except ValueError: idx_ihw = 0
 
         with i_c1:
             st.selectbox("Inference Region", list(DEFAULT_GRID_INTENSITY.keys()), index=list(DEFAULT_GRID_INTENSITY.keys()).index(inputs_data["inference"]["region"]), key="inf_reg", on_change=update_input, args=("inference", "region", "inf_reg"), help="Location of the production servers. Choosing a low-carbon region (e.g., France, Sweden) is the most effective way to reduce usage emissions.")
             st.selectbox("Inference Infra", list(INFRASTRUCTURE_PROFILES.keys()), format_func=lambda x: INFRASTRUCTURE_PROFILES[x]["name"], index=list(INFRASTRUCTURE_PROFILES.keys()).index(inputs_data["inference"]["infra_type"]), key="inf_infra", on_change=update_input, args=("inference", "infra_type", "inf_infra"), help="Facility efficiency for production.")
         with i_c2:
-            st.selectbox("Inference Hardware", inf_hw_ids, format_func=lambda x: next((h["name"] for h in inf_hw_opts if h["id"] == x), x), index=inf_hw_ids.index(curr_inf_hw) if curr_inf_hw in inf_hw_ids else 0, key="inf_hw", on_change=update_input, args=("inference", "hardware_id", "inf_hw"), help="The hardware used to serve requests.")
+            st.selectbox("Inference Hardware", inf_hw_ids, format_func=lambda x: next((h["name"] for h in inf_hw_opts if h["id"] == x), x), index=idx_ihw, key="inf_hw", on_change=update_input, args=("inference", "hardware_id", "inf_hw"), help="The hardware used to serve requests.")
             st.number_input("Device Count", value=int(inputs_data["inference"]["hardware_count"]), min_value=1, key="inf_cnt", on_change=update_input, args=("inference", "hardware_count", "inf_cnt"), help="Number of GPUs/Servers provisioned for inference.")
         with i_c3:
             st.number_input("Requests per Day", value=int(inputs_data["inference"]["req_per_day"]), min_value=1, key="inf_reqs", on_change=update_input, args=("inference", "req_per_day", "inf_reqs"), help="Daily traffic volume.")
@@ -512,9 +691,27 @@ if page == "Calculator":
 
         
 
-        if st.button("💾 Save Project Result"):
-            save_project(inputs_obj, res, score)
-            st.success("Project saved to CSV!")
+        st.divider()
+        action_col1, action_col2 = st.columns(2)
+        
+        with action_col1:
+            if st.button("💾 Save Project Result"):
+                save_project(inputs_obj, res, score)
+                st.success("Project saved to CSV!")
+
+        with action_col2:
+            # Generate PDF
+            try:
+                pdf_bytes = create_robust_pdf(inputs_obj, res, score, fig_wf, fig_sim)
+                st.download_button(
+                    label="📄 Export Report as PDF",
+                    data=pdf_bytes,
+                    file_name=f"EcoMetrics_{inputs_data['project_name'].replace(' ', '_')}.pdf",
+                    mime="application/pdf"
+                )
+            except Exception as e:
+                st.error(f"Cannot generate PDF: {e}")
+                st.info("Check if 'kaleido' is installed: pip install kaleido")
 
     except ValidationError as e:
         st.error(f"Input Validation Error: {e}")
