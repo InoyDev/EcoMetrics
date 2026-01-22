@@ -76,8 +76,7 @@ with st.sidebar:
     st.title("🌱 EcoMetrics")
     st.caption("AI Lifecycle Assessment Tool")
     # Simplified Navigation
-    page = st.radio("Navigation", ["Calculator", "Compare Projects"])
-    expert_mode = st.checkbox("Expert Mode", value=False, help="Show all configurations manually without simplified logic.")
+    page = st.radio("Navigation", ["Calculator", "Projects"])
     st.divider()
     
     with st.expander("⚙️ Advanced Settings (Assumptions)"):
@@ -116,7 +115,7 @@ inputs_data = st.session_state["inputs"]
 # --- PAGE: Calculator ---
 if page == "Calculator":
     st.markdown(
-        "<h1 style='text-align:center;'>Project Carbon Calculator</h1>",
+        "<h1 style='text-align:center;'>AI Project Footprint Calculator</h1>",
         unsafe_allow_html=True
     )
 
@@ -148,26 +147,23 @@ if page == "Calculator":
         st.number_input("Project Duration (years)", value=float(inputs_data["project_duration_years"]), min_value=0.1, step=0.5, key="p_duration", on_change=update_input, args=(None, "project_duration_years", "p_duration"), help="How long will this project run? This is crucial to calculate the share of hardware manufacturing (amortization) attributed to this project.")
     
     # --- PIVOT QUESTION (Training Phase Visibility) ---
-    if not expert_mode:
-        st.markdown("---")
-        if inputs_data["project_type"] == "genai":
-            # GenAI Logic: SaaS vs Fine-Tuning
-            genai_mode = st.radio("GenAI Implementation Strategy", ["Use existing API (SaaS)", "Fine-Tuning / Self-Hosted"], index=0, horizontal=True, help="SaaS API implies no training phase impact for you.")
-            if genai_mode == "Use existing API (SaaS)":
-                st.session_state["inputs"]["training"]["include_training"] = False
-                # Optional: Auto-set inference mode to SaaS
-                # st.session_state["inputs"]["inference"]["mode"] = "SaaS / API"
-            else:
-                st.session_state["inputs"]["training"]["include_training"] = True
+    st.markdown("---")
+    if inputs_data["project_type"] == "genai":
+        # GenAI Logic: SaaS vs Fine-Tuning
+        genai_mode = st.radio("GenAI Implementation Strategy", ["Use existing API (SaaS)", "Fine-Tuning / Self-Hosted"], index=0, horizontal=True, help="SaaS API implies no training phase impact for you.")
+        if genai_mode == "Use existing API (SaaS)":
+            st.session_state["inputs"]["training"]["include_training"] = False
+            # Optional: Auto-set inference mode to SaaS
+            # st.session_state["inputs"]["inference"]["mode"] = "SaaS / API"
         else:
-            # ML / DL Logic: Ask explicitly
-            train_q = st.radio("Do you have a Training or Fine-tuning phase?", ["Yes", "No (Inference Only)"], index=0, horizontal=True)
-            if train_q == "No (Inference Only)":
-                st.session_state["inputs"]["training"]["include_training"] = False
-            else:
-                st.session_state["inputs"]["training"]["include_training"] = True
+            st.session_state["inputs"]["training"]["include_training"] = True
     else:
-        st.markdown("---")
+        # ML / DL Logic: Ask explicitly
+        train_q = st.radio("Do you have a Training or Fine-tuning phase?", ["Yes", "No (Inference Only)"], index=0, horizontal=True)
+        if train_q == "No (Inference Only)":
+            st.session_state["inputs"]["training"]["include_training"] = False
+        else:
+            st.session_state["inputs"]["training"]["include_training"] = True
 
     # --- STEP 2: DEVELOPMENT & TRAINING ---
     st.subheader("2. Development & Training (MLOps)")
@@ -193,9 +189,6 @@ if page == "Calculator":
         st.number_input("Dev Hours (Coding/Testing)", value=float(inputs_data["development"]["dev_hours"]), min_value=0.0, step=10.0, key="d_hours", on_change=update_input, args=("development", "dev_hours", "d_hours"), help="Total estimated hours spent by the team on exploration, coding, and debugging.")
     
     # Training (Conditional)
-    if expert_mode:
-        st.checkbox("Include Training Phase", value=inputs_data["training"]["include_training"], key="exp_train_toggle", on_change=update_input, args=("training", "include_training", "exp_train_toggle"))
-
     if inputs_data["training"]["include_training"]:
         st.markdown("**🏋️ Training Phase (Runs)**")
         t_c1, t_c2, t_c3, t_c4 = st.columns(4)
@@ -510,8 +503,8 @@ if page == "Calculator":
         st.error(f"Input Validation Error: {e}")
 
 # --- PAGE: Compare ---
-elif page == "Compare Projects":
-    st.header("Compare Projects")
+elif page == "Projects":
+    st.header("Projects")
     df = load_projects()
     if df.empty:
         st.info("No saved projects yet.")
